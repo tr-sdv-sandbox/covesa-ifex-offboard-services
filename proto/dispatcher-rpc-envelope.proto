@@ -1,0 +1,45 @@
+// Generated from dispatcher_rpc_envelope.ifex by covesa-ifex-core
+// DO NOT EDIT - regenerate with: ./generate_proto.sh
+syntax = "proto3";
+
+
+
+package swdv.dispatcher_rpc_envelope;
+
+// Namespace: envelope
+// RPC envelope types for cloud-to-vehicle service invocation
+
+// RPC execution status (mirrors Dispatcher call_status_t with transport errors)
+enum rpc_status_t {
+  SUCCESS = 0;
+  FAILED = 1;
+  TIMEOUT = 2;
+  SERVICE_UNAVAILABLE = 3;
+  METHOD_NOT_FOUND = 4;
+  INVALID_PARAMETERS = 5;
+  TRANSPORT_ERROR = 6;
+  DUPLICATE_REQUEST = 7;
+}
+
+// Request from cloud to invoke onboard service method
+message rpc_request_t {
+  string correlation_id = 1;
+  string service_name = 2;
+  string method_name = 3;
+  string parameters_json = 4;
+  uint32 timeout_ms = 5;
+  sint64 request_timestamp_ns = 6;
+}
+
+// Response from vehicle to cloud
+message rpc_response_t {
+  string correlation_id = 1;
+  rpc_status_t status = 2;
+  string result_json = 3;
+  string error_message = 4;
+  uint32 duration_ms = 5;
+  string service_endpoint = 6;
+  sint64 response_timestamp_ns = 7;
+}
+
+

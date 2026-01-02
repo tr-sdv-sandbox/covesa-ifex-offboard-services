@@ -1,0 +1,116 @@
+// Offboard envelope for RPC messages
+// This wraps the vehicle-side RPC messages with offboard metadata
+syntax = "proto3";
+
+package ifex.offboard.rpc;
+
+import "dispatcher-rpc-envelope.proto";
+
+// Offboard metadata added during ingestion
+message offboard_metadata_t {
+    // Vehicle identity (from MQTT topic, verified by ACL)
+    string vehicle_id = 1;
+
+    // Enrichment from vehicle registry
+    string fleet_id = 2;
+    string region = 3;
+    string customer_id = 4;
+
+    // Offboard timestamps
+    uint64 received_at_ns = 10;
+    uint64 processed_at_ns = 11;
+
+    // Ingestion metadata
+    string bridge_id = 20;
+    string kafka_topic = 21;
+    int32 kafka_partition = 22;
+    int64 kafka_offset = 23;
+}
+
+// Direction of RPC message
+enum rpc_direction_t {
+    UNKNOWN = 0;
+    CLOUD_TO_VEHICLE = 1;  // c2v - request from cloud
+    VEHICLE_TO_CLOUD = 2;  // v2c - response from vehicle
+}
+
+// Offboard RPC request (cloud -> vehicle)
+message rpc_request_offboard_t {
+    // Offboard-added metadata
+    offboard_metadata_t metadata = 1;
+
+    // Direction indicator
+    rpc_direction_t direction = 2;
+
+    // Original request
+    swdv.dispatcher_rpc_envelope.rpc_request_t request = 3;
+
+    // Cloud-side tracking
+    string request_id = 10;        // Cloud-generated unique ID
+    string requester_id = 11;      // Who initiated the request
+    uint64 timeout_at_ns = 12;     // When to consider timed out
+}
+
+// Offboard RPC response (vehicle -> cloud)
+message rpc_response_offboard_t {
+    // Offboard-added metadata
+    offboard_metadata_t metadata = 1;
+
+    // Direction indicator
+    rpc_direction_t direction = 2;
+
+    // Original response
+    swdv.dispatcher_rpc_envelope.rpc_response_t response = 3;
+
+    // Cloud-side tracking
+    string request_id = 10;        // Matched from correlation_id
+    uint64 round_trip_ns = 11;     // Time from request to response
+}
+
+// Unified RPC message (can be request or response)
+message rpc_offboard_t {
+    // Offboard-added metadata
+    offboard_metadata_t metadata = 1;
+
+    // Direction indicator
+    rpc_direction_t direction = 2;
+
+    // One of these will be set
+    oneof payload {
+        swdv.dispatcher_rpc_envelope.rpc_request_t request = 10;
+        swdv.dispatcher_rpc_envelope.rpc_response_t response = 11;
+    }
+
+    // Cloud-side tracking
+    string request_id = 20;
+    uint64 round_trip_ns = 21;
+}
+
+// Flattened RPC record for PostgreSQL/analytics
+message rpc_record_t {
+    // Identity
+    string vehicle_id = 1;
+    string correlation_id = 2;
+    string request_id = 3;
+
+    // Request info
+    string service_name = 10;
+    string method_name = 11;
+    string parameters_json = 12;
+    uint32 timeout_ms = 13;
+
+    // Response info
+    string status = 20;
+    string result_json = 21;
+    string error_message = 22;
+
+    // Timing
+    uint64 request_timestamp_ns = 30;
+    uint64 response_timestamp_ns = 31;
+    uint64 round_trip_ns = 32;
+
+    // Enrichment
+    string fleet_id = 40;
+    string region = 41;
+    string requester_id = 42;
+}

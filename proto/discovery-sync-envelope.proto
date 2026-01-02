@@ -1,0 +1,94 @@
+// Generated from discovery_sync_envelope.ifex by covesa-ifex-core
+// DO NOT EDIT - regenerate with: ./generate_proto.sh
+syntax = "proto3";
+
+
+
+package swdv.discovery_sync_envelope;
+
+// Namespace: swdv.discovery_sync_envelope
+// Discovery state synchronization messages
+
+// Type of sync event
+enum sync_event_type_t {
+  FULL_SYNC = 0;
+  SERVICE_REGISTERED = 1;
+  SERVICE_UNREGISTERED = 2;
+  SERVICE_STATUS_CHANGED = 3;
+  HEARTBEAT = 4;
+}
+
+// Service availability status
+enum service_status_t {
+  AVAILABLE = 0;
+  UNAVAILABLE = 1;
+  STARTING = 2;
+  STOPPING = 3;
+  ERROR = 4;
+}
+
+// Service transport protocol
+enum transport_type_t {
+  GRPC = 0;
+  HTTP_REST = 1;
+  DBUS = 2;
+  SOMEIP = 3;
+  MQTT = 4;
+}
+
+// Service network endpoint
+message service_endpoint_t {
+  string address = 1;
+  transport_type_t transport = 2;
+}
+
+// Service method metadata
+message method_info_t {
+  string name = 1;
+  string description = 2;
+}
+
+// Service namespace with methods
+message namespace_info_t {
+  string name = 1;
+  repeated method_info_t methods = 2;
+}
+
+// Complete service information
+message service_info_t {
+  string registration_id = 1;
+  string name = 2;
+  string version = 3;
+  string description = 4;
+  service_endpoint_t endpoint = 5;
+  uint32 status = 6;
+  uint64 last_heartbeat_ms = 7;
+  repeated namespace_info_t namespaces = 8;
+}
+
+// A single sync event
+message sync_event_t {
+  sync_event_type_t event_type = 1;
+  uint64 sequence_number = 2;
+  uint64 timestamp_ns = 3;
+  string registration_id = 4;
+  service_info_t service_info = 5;
+}
+
+// Sync message containing one or more events
+message sync_message_t {
+  string vehicle_id = 1;
+  string bridge_instance_id = 2;
+  repeated sync_event_t events = 3;
+  uint32 state_checksum = 4;
+  uint32 total_services = 5;
+}
+
+// Acknowledgment from cloud (optional, for reliable sync)
+message sync_ack_t {
+  uint64 last_sequence_received = 1;
+  bool checksum_match = 2;
+  bool request_full_sync = 3;
+}
+
+

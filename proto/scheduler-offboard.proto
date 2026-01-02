@@ -1,0 +1,96 @@
+// Offboard envelope for scheduler sync messages
+// This wraps the vehicle-side sync message with offboard metadata
+syntax = "proto3";
+
+package ifex.offboard.scheduler;
+
+import "scheduler-sync-envelope.proto";
+
+// Offboard metadata added during ingestion
+message offboard_metadata_t {
+    // Vehicle identity (from MQTT topic, verified by ACL)
+    string vehicle_id = 1;
+
+    // Enrichment from vehicle registry
+    string fleet_id = 2;
+    string region = 3;
+    string customer_id = 4;
+
+    // Offboard timestamps
+    uint64 received_at_ns = 10;
+    uint64 processed_at_ns = 11;
+
+    // Ingestion metadata
+    string bridge_id = 20;
+    string kafka_topic = 21;
+    int32 kafka_partition = 22;
+    int64 kafka_offset = 23;
+}
+
+// Complete offboard scheduler message (stored in Kafka)
+message scheduler_offboard_t {
+    // Offboard-added metadata
+    offboard_metadata_t metadata = 1;
+
+    // Original vehicle message (embedded, not copied field-by-field)
+    swdv.scheduler_sync_envelope.sync_message_t sync_message = 2;
+}
+
+// Flattened job record for PostgreSQL/analytics
+// Denormalized for easier querying
+message job_record_t {
+    // Identity
+    string vehicle_id = 1;
+    string job_id = 2;
+
+    // Job info
+    string title = 3;
+    string service = 4;
+    string method = 5;
+    string parameters_json = 6;
+
+    // Schedule
+    string scheduled_time = 10;
+    string recurrence_rule = 11;
+    string next_run_time = 12;
+
+    // Status
+    string status = 20;
+    uint64 created_at_ms = 21;
+    uint64 updated_at_ms = 22;
+
+    // Enrichment
+    string fleet_id = 30;
+    string region = 31;
+
+    // Offboard tracking
+    uint64 first_seen_ns = 40;
+    uint64 last_updated_ns = 41;
+    uint64 sequence_number = 42;
+}
+
+// Flattened execution record for PostgreSQL/analytics
+message execution_record_t {
+    // Identity
+    string vehicle_id = 1;
+    string job_id = 2;
+    string execution_id = 3;
+
+    // Result
+    string status = 10;
+    uint64 executed_at_ms = 11;
+    uint32 duration_ms = 12;
+    string result_json = 13;
+    string error_message = 14;
+
+    // Next schedule
+    string next_run_time = 20;
+
+    // Enrichment
+    string fleet_id = 30;
+    string region = 31;
+
+    // Offboard tracking
+    uint64 received_at_ns = 40;
+    uint64 sequence_number = 41;
+}

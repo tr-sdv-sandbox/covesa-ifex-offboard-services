@@ -1,0 +1,67 @@
+// Offboard envelope for discovery sync messages
+// This wraps the vehicle-side sync message with offboard metadata
+syntax = "proto3";
+
+package ifex.offboard.discovery;
+
+import "discovery-sync-envelope.proto";
+
+// Offboard metadata added during ingestion
+message offboard_metadata_t {
+    // Vehicle identity (from MQTT topic, verified by ACL)
+    string vehicle_id = 1;
+
+    // Enrichment from vehicle registry
+    string fleet_id = 2;
+    string region = 3;
+    string customer_id = 4;
+
+    // Offboard timestamps
+    uint64 received_at_ns = 10;
+    uint64 processed_at_ns = 11;
+
+    // Ingestion metadata
+    string bridge_id = 20;
+    string kafka_topic = 21;
+    int32 kafka_partition = 22;
+    int64 kafka_offset = 23;
+}
+
+// Complete offboard discovery message (stored in Kafka)
+message discovery_offboard_t {
+    // Offboard-added metadata
+    offboard_metadata_t metadata = 1;
+
+    // Original vehicle message (embedded, not copied field-by-field)
+    swdv.discovery_sync_envelope.sync_message_t sync_message = 2;
+}
+
+// Flattened service record for PostgreSQL/analytics
+// Denormalized for easier querying
+message service_record_t {
+    // Identity
+    string vehicle_id = 1;
+    string registration_id = 2;
+
+    // Service info
+    string service_name = 3;
+    string version = 4;
+    string description = 5;
+
+    // Endpoint
+    string endpoint_address = 6;
+    string transport_type = 7;
+
+    // Status
+    string status = 10;
+    uint64 last_heartbeat_ms = 11;
+
+    // Enrichment
+    string fleet_id = 20;
+    string region = 21;
+
+    // Timestamps
+    uint64 first_seen_ns = 30;
+    uint64 last_updated_ns = 31;
+    uint64 sequence_number = 32;
+}
