@@ -117,3 +117,59 @@ covesa-ifex-offboard-services/
 | POSTGRES_DB | ifex_offboard | Database name |
 | POSTGRES_USER | ifex | Database user |
 | POSTGRES_PASSWORD | ifex_dev | Database password |
+
+## Offline Vehicle Command Delivery
+
+Commands sent to offline vehicles are delivered when they reconnect. This relies on MQTT persistent sessions.
+
+### How It Works
+
+```
+Cloud Service ──▶ MQTT Broker ──▶ Vehicle (offline)
+                      │
+                      ▼
+               Queue (QoS 1)
+                      │
+               Vehicle reconnects
+                      │
+                      ▼
+               Deliver queued messages
+```
+
+**Requirements:**
+1. **Cloud publishes with QoS 1** - Ensures broker queues the message
+2. **Vehicle uses `clean_session=false`** - Enables persistent subscriptions
+3. **Vehicle subscribes before disconnect** - Broker knows to queue for this client
+
+### MQTT Topic Patterns
+
+| Direction | Pattern | QoS | Description |
+|-----------|---------|-----|-------------|
+| Cloud → Vehicle | `c2v/{vehicle_id}/{content_id}` | 1 | Commands to vehicle |
+| Vehicle → Cloud | `v2c/{vehicle_id}/{content_id}` | 1 | Telemetry/sync from vehicle |
+
+### Content IDs for c2v
+
+| Content ID | Purpose | Payload |
+|------------|---------|---------|
+| 200 | RPC requests | `dispatcher_rpc_envelope` |
+| 202 | Scheduler commands | `scheduler_sync_envelope` |
+
+### Current Implementation Status
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| MQTT QoS 1 publish | ✅ Implemented | Cloud services publish with QoS 1 |
+| Vehicle persistent session | ✅ Implemented | Backend Transport uses `clean_session=false` |
+| Broker message queueing | ✅ Works | Mosquitto queues for offline subscribers |
+| Command delivery on reconnect | ✅ Tested | E2E test in `deploy/test-offline-vehicle.sh` |
+| Delivery confirmation (c2v→v2c ack) | ❌ Not implemented | Cloud doesn't track if vehicle received command |
+| Retry on delivery failure | ❌ Not implemented | No cloud-side retry mechanism |
+| Command expiry/TTL | ❌ Not implemented | Stale commands may be delivered |
+
+### Future Enhancements
+
+1. **Delivery tracking** - Vehicle sends ack on `v2c/{vehicle_id}/ack`, cloud tracks pending commands
+2. **Command TTL** - Include expiry timestamp, vehicle ignores stale commands
+3. **Retry mechanism** - Cloud retries unacked commands with exponential backoff
+4. **Offline queue visibility** - API to query pending commands for a vehicle
