@@ -126,17 +126,38 @@ target_link_libraries(envelope_codec PUBLIC
 add_library(mqtt_kafka_router STATIC
     libs/mqtt_kafka_router/src/mqtt_kafka_router.cpp
     libs/mqtt_kafka_router/src/vehicle_context.cpp
+    libs/mqtt_kafka_router/src/enrichment_consumer.cpp
 )
 target_include_directories(mqtt_kafka_router PUBLIC
     libs/mqtt_kafka_router/include
+    libs/kafka_client/include
     ${RDKAFKA_INCLUDE_DIRS}
 )
 target_link_libraries(mqtt_kafka_router PUBLIC
-    ${RDKAFKA_LIBRARIES}
+    kafka_client
+    ifex_offboard_proto
     ${PAHO_MQTT_CPP}
     ${PAHO_MQTT_C}
     glog::glog
 )
+
+# gRPC Service Base library (for cloud services)
+add_library(grpc_service_base STATIC
+    libs/grpc_service_base/src/grpc_service_base.cpp
+)
+target_include_directories(grpc_service_base PUBLIC
+    libs/grpc_service_base/include
+)
+target_link_libraries(grpc_service_base PUBLIC
+    ifex_offboard_proto
+    glog::glog
+    gflags
+)
+if(gRPC_FOUND)
+    target_link_libraries(grpc_service_base PUBLIC gRPC::grpc++_reflection)
+else()
+    target_link_libraries(grpc_service_base PUBLIC ${GRPC_REFLECTION})
+endif()
 
 # MQTT-Kafka Bridge service
 add_executable(mqtt_kafka_bridge
@@ -197,6 +218,84 @@ target_link_libraries(rpc_gateway PRIVATE
     gflags
 )
 
+# Enrichment Exporter service
+add_executable(enrichment_exporter
+    services/enrichment_exporter/main.cpp
+)
+target_link_libraries(enrichment_exporter PRIVATE
+    kafka_client
+    postgres_client
+    ifex_offboard_proto
+    glog::glog
+    gflags
+)
+
+# Cloud Discovery Service
+add_executable(cloud_discovery
+    services/cloud_discovery/main.cpp
+    services/cloud_discovery/discovery_service_impl.cpp
+    services/cloud_discovery/discovery_query.cpp
+)
+target_include_directories(cloud_discovery PRIVATE
+    services/cloud_discovery
+    libs/postgres_client/include
+    libs/grpc_service_base/include
+)
+target_link_libraries(cloud_discovery PRIVATE
+    grpc_service_base
+    postgres_client
+    ifex_offboard_proto
+    glog::glog
+    gflags
+)
+
+# Cloud Dispatcher Service
+add_executable(cloud_dispatcher
+    services/cloud_dispatcher/main.cpp
+    services/cloud_dispatcher/dispatcher_service_impl.cpp
+    services/cloud_dispatcher/rpc_request_manager.cpp
+    services/cloud_dispatcher/request_producer.cpp
+    services/cloud_dispatcher/response_consumer.cpp
+)
+target_include_directories(cloud_dispatcher PRIVATE
+    services/cloud_dispatcher
+    libs/postgres_client/include
+    libs/grpc_service_base/include
+    libs/envelope_codec/include
+    ${RDKAFKA_INCLUDE_DIRS}
+)
+target_link_libraries(cloud_dispatcher PRIVATE
+    grpc_service_base
+    postgres_client
+    envelope_codec
+    ifex_offboard_proto
+    ${RDKAFKA_LIBRARIES}
+    glog::glog
+    gflags
+)
+
+# Cloud Scheduler Service
+add_executable(cloud_scheduler
+    services/cloud_scheduler/main.cpp
+    services/cloud_scheduler/scheduler_service_impl.cpp
+    services/cloud_scheduler/scheduler_query.cpp
+    services/cloud_scheduler/job_command_producer.cpp
+)
+target_include_directories(cloud_scheduler PRIVATE
+    services/cloud_scheduler
+    libs/postgres_client/include
+    libs/grpc_service_base/include
+    ${RDKAFKA_INCLUDE_DIRS}
+)
+target_link_libraries(cloud_scheduler PRIVATE
+    grpc_service_base
+    postgres_client
+    ifex_offboard_proto
+    ${RDKAFKA_LIBRARIES}
+    glog::glog
+    gflags
+)
+
 # Tests
 if(BUILD_TESTS)
     enable_testing()
@@ -210,5 +309,9 @@ install(TARGETS
     discovery_mirror
     scheduler_mirror
     rpc_gateway
+    enrichment_exporter
+    cloud_discovery
+    cloud_dispatcher
+    cloud_scheduler
     RUNTIME DESTINATION bin
 )
