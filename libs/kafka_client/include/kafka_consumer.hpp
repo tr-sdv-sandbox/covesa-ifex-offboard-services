@@ -43,11 +43,21 @@ public:
     KafkaConsumer(const KafkaConsumer&) = delete;
     KafkaConsumer& operator=(const KafkaConsumer&) = delete;
 
-    /// Subscribe to topics
+    /// Subscribe to topics (uses consumer group)
     bool subscribe(const std::vector<std::string>& topics);
 
     /// Unsubscribe from all topics
     void unsubscribe();
+
+    /// Manually assign partitions (bypasses consumer group)
+    /// @param topic Topic name
+    /// @param partitions Partition numbers to assign
+    /// @param offset Starting offset (OFFSET_BEGINNING, OFFSET_END, or specific offset)
+    bool assign(const std::string& topic, const std::vector<int32_t>& partitions, int64_t offset);
+
+    /// Get topic metadata (partition count)
+    /// @return Number of partitions, or -1 on error
+    int32_t get_partition_count(const std::string& topic);
 
     /// Poll for a message
     /// @param timeout_ms Maximum time to wait

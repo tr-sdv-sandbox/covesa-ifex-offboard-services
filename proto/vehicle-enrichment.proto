@@ -1,0 +1,24 @@
+syntax = "proto3";
+
+package ifex.offboard;
+
+// Vehicle enrichment data - static metadata about vehicles
+// Used to enrich incoming telemetry with fleet context
+message VehicleEnrichment {
+    string vehicle_id = 1;      // VIN or unique vehicle identifier
+    string fleet_id = 2;        // Fleet this vehicle belongs to
+    string region = 3;          // Geographic region (eu-west, us-east, etc.)
+    string customer_id = 4;     // Customer/owner identifier
+
+    // Vehicle attributes
+    string model = 5;           // Vehicle model
+    int32 year = 6;             // Model year
+    string variant = 7;         // Model variant/trim
+
+    // Operational metadata
+    repeated string tags = 8;   // Arbitrary tags for filtering
+
+    // Timestamps (milliseconds since epoch)
+    int64 created_at_ms = 10;
+    int64 updated_at_ms = 11;
+}

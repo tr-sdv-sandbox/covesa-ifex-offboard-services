@@ -84,6 +84,50 @@ void KafkaConsumer::unsubscribe() {
     consumer_->unsubscribe();
 }
 
+bool KafkaConsumer::assign(const std::string& topic,
+                           const std::vector<int32_t>& partitions,
+                           int64_t offset) {
+    std::vector<RdKafka::TopicPartition*> tps;
+    for (int32_t p : partitions) {
+        auto* tp = RdKafka::TopicPartition::create(topic, p);
+        tp->set_offset(offset);
+        tps.push_back(tp);
+    }
+
+    RdKafka::ErrorCode err = consumer_->assign(tps);
+
+    for (auto* tp : tps) {
+        delete tp;
+    }
+
+    if (err != RdKafka::ERR_NO_ERROR) {
+        LOG(ERROR) << "Failed to assign partitions: " << RdKafka::err2str(err);
+        return false;
+    }
+    return true;
+}
+
+int32_t KafkaConsumer::get_partition_count(const std::string& topic) {
+    RdKafka::Metadata* metadata = nullptr;
+    RdKafka::ErrorCode err = consumer_->metadata(false, nullptr, &metadata, 5000);
+
+    if (err != RdKafka::ERR_NO_ERROR) {
+        LOG(ERROR) << "Failed to get metadata: " << RdKafka::err2str(err);
+        return -1;
+    }
+
+    int32_t count = -1;
+    for (const auto* t : *metadata->topics()) {
+        if (t->topic() == topic) {
+            count = static_cast<int32_t>(t->partitions()->size());
+            break;
+        }
+    }
+
+    delete metadata;
+    return count;
+}
+
 bool KafkaConsumer::poll(int timeout_ms, KafkaMessage& message) {
     std::unique_ptr<RdKafka::Message> msg(consumer_->consume(timeout_ms));
 

@@ -1,0 +1,967 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IFEX Fleet Dashboard</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #f5f7fa;
+            color: #333;
+            line-height: 1.6;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            color: white;
+            padding: 1rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .header h1 {
+            font-size: 1.5rem;
+            font-weight: 600;
+        }
+
+        .header .refresh-btn {
+            background: rgba(255,255,255,0.1);
+            border: 1px solid rgba(255,255,255,0.2);
+            color: white;
+            padding: 0.5rem 1rem;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .header .refresh-btn:hover {
+            background: rgba(255,255,255,0.2);
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 1.5rem;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .stat-card {
+            background: white;
+            border-radius: 8px;
+            padding: 1.25rem;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+
+        .stat-card .label {
+            font-size: 0.875rem;
+            color: #666;
+            margin-bottom: 0.25rem;
+        }
+
+        .stat-card .value {
+            font-size: 2rem;
+            font-weight: 700;
+            color: #1a1a2e;
+        }
+
+        .stat-card.highlight {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .stat-card.highlight .label,
+        .stat-card.highlight .value {
+            color: white;
+        }
+
+        .panels {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+
+        @media (max-width: 900px) {
+            .panels {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .panel {
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+
+        .panel-header {
+            background: #f8f9fa;
+            padding: 1rem 1.25rem;
+            border-bottom: 1px solid #e9ecef;
+            font-weight: 600;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .panel-body {
+            padding: 0;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+
+        .list-item {
+            padding: 0.75rem 1.25rem;
+            border-bottom: 1px solid #f0f0f0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .list-item:last-child {
+            border-bottom: none;
+        }
+
+        .list-item:hover {
+            background: #f8f9fa;
+        }
+
+        .badge {
+            background: #e9ecef;
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+
+        .badge.primary {
+            background: #667eea;
+            color: white;
+        }
+
+        .badge.success {
+            background: #28a745;
+            color: white;
+        }
+
+        .vehicles-section {
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+
+        .search-bar {
+            padding: 1rem 1.25rem;
+            background: #f8f9fa;
+            border-bottom: 1px solid #e9ecef;
+            display: flex;
+            gap: 1rem;
+            flex-wrap: wrap;
+        }
+
+        .search-bar input,
+        .search-bar select {
+            padding: 0.5rem 0.75rem;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 0.875rem;
+        }
+
+        .search-bar input {
+            flex: 1;
+            min-width: 200px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        th, td {
+            padding: 0.75rem 1rem;
+            text-align: left;
+            border-bottom: 1px solid #f0f0f0;
+        }
+
+        th {
+            background: #f8f9fa;
+            font-weight: 600;
+            font-size: 0.875rem;
+            color: #666;
+        }
+
+        tr:hover td {
+            background: #f8f9fa;
+        }
+
+        .vehicle-link {
+            color: #667eea;
+            text-decoration: none;
+            font-weight: 500;
+        }
+
+        .vehicle-link:hover {
+            text-decoration: underline;
+        }
+
+        .pagination {
+            padding: 1rem;
+            display: flex;
+            justify-content: center;
+            gap: 0.5rem;
+            background: #f8f9fa;
+            border-top: 1px solid #e9ecef;
+        }
+
+        .pagination button {
+            padding: 0.5rem 1rem;
+            border: 1px solid #ddd;
+            background: white;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        .pagination button:hover:not(:disabled) {
+            background: #667eea;
+            color: white;
+            border-color: #667eea;
+        }
+
+        .pagination button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .pagination .page-info {
+            padding: 0.5rem 1rem;
+            color: #666;
+        }
+
+        /* Modal */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.5);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .modal-overlay.active {
+            display: flex;
+        }
+
+        .modal {
+            background: white;
+            border-radius: 8px;
+            max-width: 800px;
+            width: 90%;
+            max-height: 80vh;
+            overflow: auto;
+        }
+
+        .modal-header {
+            padding: 1.25rem;
+            border-bottom: 1px solid #e9ecef;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .modal-header h2 {
+            font-size: 1.25rem;
+        }
+
+        .modal-close {
+            background: none;
+            border: none;
+            font-size: 1.5rem;
+            cursor: pointer;
+            color: #666;
+        }
+
+        .modal-body {
+            padding: 1.25rem;
+        }
+
+        .detail-section {
+            margin-bottom: 1.5rem;
+        }
+
+        .detail-section h3 {
+            font-size: 1rem;
+            margin-bottom: 0.75rem;
+            color: #666;
+        }
+
+        .detail-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 0.75rem;
+        }
+
+        .detail-item {
+            background: #f8f9fa;
+            padding: 0.75rem;
+            border-radius: 4px;
+        }
+
+        .detail-item .label {
+            font-size: 0.75rem;
+            color: #666;
+        }
+
+        .detail-item .value {
+            font-weight: 600;
+        }
+
+        .service-list, .job-list {
+            list-style: none;
+        }
+
+        .service-list li, .job-list li {
+            padding: 0.5rem;
+            background: #f8f9fa;
+            margin-bottom: 0.5rem;
+            border-radius: 4px;
+            display: flex;
+            justify-content: space-between;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 2rem;
+            color: #666;
+        }
+
+        .error {
+            background: #fee;
+            color: #c00;
+            padding: 1rem;
+            border-radius: 4px;
+            margin: 1rem 0;
+        }
+
+        /* Form styles */
+        .form-group {
+            margin-bottom: 0.75rem;
+        }
+
+        .form-group label {
+            display: block;
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: #666;
+            margin-bottom: 0.25rem;
+        }
+
+        .form-group input,
+        .form-group textarea {
+            width: 100%;
+            padding: 0.5rem;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 0.875rem;
+            font-family: inherit;
+        }
+
+        .form-group textarea {
+            resize: vertical;
+            font-family: monospace;
+        }
+
+        .form-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 0.75rem;
+        }
+
+        .btn {
+            padding: 0.5rem 1rem;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.875rem;
+            font-weight: 500;
+            transition: background 0.2s;
+        }
+
+        .btn.primary {
+            background: #667eea;
+            color: white;
+        }
+
+        .btn.primary:hover {
+            background: #5a6fd6;
+        }
+
+        .btn.danger {
+            background: #dc3545;
+            color: white;
+        }
+
+        .result-box {
+            background: #f8f9fa;
+            border: 1px solid #e9ecef;
+            border-radius: 4px;
+            padding: 0.75rem;
+            font-family: monospace;
+            font-size: 0.8rem;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+
+        .result-box.success {
+            background: #d4edda;
+            border-color: #c3e6cb;
+            color: #155724;
+        }
+
+        .result-box.error {
+            background: #f8d7da;
+            border-color: #f5c6cb;
+            color: #721c24;
+        }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <h1>IFEX Fleet Dashboard</h1>
+        <button class="refresh-btn" onclick="refreshAll()">Refresh</button>
+    </header>
+
+    <div class="container">
+        <!-- Stats -->
+        <div class="stats-grid" id="stats">
+            <div class="stat-card highlight">
+                <div class="label">Total Vehicles</div>
+                <div class="value" id="stat-total-vehicles">-</div>
+            </div>
+            <div class="stat-card">
+                <div class="label">Active Vehicles</div>
+                <div class="value" id="stat-active-vehicles">-</div>
+            </div>
+            <div class="stat-card">
+                <div class="label">Total Services</div>
+                <div class="value" id="stat-total-services">-</div>
+            </div>
+            <div class="stat-card">
+                <div class="label">Total Jobs</div>
+                <div class="value" id="stat-total-jobs">-</div>
+            </div>
+        </div>
+
+        <!-- RPC and Scheduler Panels -->
+        <div class="panels">
+            <!-- RPC Dispatch Panel -->
+            <div class="panel">
+                <div class="panel-header">
+                    <span>RPC Dispatch</span>
+                    <span class="badge" id="mqtt-status">MQTT: --</span>
+                </div>
+                <div class="panel-body" style="padding: 1rem;">
+                    <form id="rpc-form" onsubmit="return dispatchRpc(event)">
+                        <div class="form-group">
+                            <label>Vehicle ID</label>
+                            <input type="text" id="rpc-vehicle" placeholder="VIN00000000000001" required>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>Service</label>
+                                <input type="text" id="rpc-service" placeholder="echo_service" required>
+                            </div>
+                            <div class="form-group">
+                                <label>Method</label>
+                                <input type="text" id="rpc-method" placeholder="echo" required>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label>Parameters (JSON)</label>
+                            <textarea id="rpc-params" rows="2" placeholder='{"message": "hello"}'>{}</textarea>
+                        </div>
+                        <button type="submit" class="btn primary">Send RPC</button>
+                    </form>
+                    <div id="rpc-result" style="margin-top: 1rem; display: none;"></div>
+                </div>
+            </div>
+
+            <!-- Scheduler Panel -->
+            <div class="panel">
+                <div class="panel-header">
+                    <span>Schedule Job</span>
+                </div>
+                <div class="panel-body" style="padding: 1rem;">
+                    <form id="schedule-form" onsubmit="return scheduleJob(event)">
+                        <div class="form-group">
+                            <label>Vehicle ID</label>
+                            <input type="text" id="schedule-vehicle" placeholder="VIN00000000000001" required>
+                        </div>
+                        <div class="form-group">
+                            <label>Job Title</label>
+                            <input type="text" id="schedule-title" placeholder="Hourly check">
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>Service</label>
+                                <input type="text" id="schedule-service" placeholder="climate_service" required>
+                            </div>
+                            <div class="form-group">
+                                <label>Method</label>
+                                <input type="text" id="schedule-method" placeholder="get_status" required>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label>Parameters (JSON)</label>
+                            <textarea id="schedule-params" rows="2" placeholder='{}'>{}</textarea>
+                        </div>
+                        <div class="form-group">
+                            <label>Recurrence (iCal RRULE, optional)</label>
+                            <input type="text" id="schedule-recurrence" placeholder="FREQ=HOURLY;INTERVAL=1">
+                        </div>
+                        <button type="submit" class="btn primary">Schedule Job</button>
+                    </form>
+                    <div id="schedule-result" style="margin-top: 1rem; display: none;"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Region and Services Panels -->
+        <div class="panels">
+            <div class="panel">
+                <div class="panel-header">
+                    <span>By Region</span>
+                </div>
+                <div class="panel-body" id="region-list">
+                    <div class="loading">Loading...</div>
+                </div>
+            </div>
+            <div class="panel">
+                <div class="panel-header">
+                    <span>Services Overview</span>
+                </div>
+                <div class="panel-body" id="service-list">
+                    <div class="loading">Loading...</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Vehicles Table -->
+        <div class="vehicles-section">
+            <div class="search-bar">
+                <input type="text" id="search-input" placeholder="Search by VIN..." onkeyup="handleSearch(event)">
+                <select id="region-filter" onchange="loadVehicles()">
+                    <option value="">All Regions</option>
+                </select>
+                <select id="fleet-filter" onchange="loadVehicles()">
+                    <option value="">All Fleets</option>
+                </select>
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Vehicle ID</th>
+                        <th>Fleet</th>
+                        <th>Region</th>
+                        <th>Model</th>
+                        <th>Year</th>
+                        <th>Services</th>
+                        <th>Jobs</th>
+                    </tr>
+                </thead>
+                <tbody id="vehicle-table">
+                    <tr><td colspan="7" class="loading">Loading...</td></tr>
+                </tbody>
+            </table>
+            <div class="pagination" id="pagination"></div>
+        </div>
+    </div>
+
+    <!-- Vehicle Detail Modal -->
+    <div class="modal-overlay" id="vehicle-modal">
+        <div class="modal">
+            <div class="modal-header">
+                <h2 id="modal-title">Vehicle Details</h2>
+                <button class="modal-close" onclick="closeModal()">&times;</button>
+            </div>
+            <div class="modal-body" id="modal-body">
+                <div class="loading">Loading...</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = '';
+        let currentPage = 1;
+        let searchTimeout = null;
+
+        async function fetchJson(url) {
+            const response = await fetch(API_BASE + url);
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            return response.json();
+        }
+
+        async function loadStats() {
+            try {
+                const stats = await fetchJson('/api/stats');
+                document.getElementById('stat-total-vehicles').textContent = stats.total_vehicles.toLocaleString();
+                document.getElementById('stat-active-vehicles').textContent = stats.active_vehicles.toLocaleString();
+                document.getElementById('stat-total-services').textContent = stats.total_services.toLocaleString();
+                document.getElementById('stat-total-jobs').textContent = stats.total_jobs.toLocaleString();
+
+                // Region list
+                const regionHtml = stats.by_region.map(r => `
+                    <div class="list-item">
+                        <span>${r.region}</span>
+                        <span class="badge">${r.count} vehicles</span>
+                    </div>
+                `).join('');
+                document.getElementById('region-list').innerHTML = regionHtml || '<div class="list-item">No data</div>';
+
+            } catch (err) {
+                console.error('Failed to load stats:', err);
+            }
+        }
+
+        async function loadServices() {
+            try {
+                const data = await fetchJson('/api/services');
+                const html = data.services.map(s => `
+                    <div class="list-item">
+                        <span>${s.service_name}</span>
+                        <span class="badge primary">${s.vehicle_count} vehicles</span>
+                    </div>
+                `).join('');
+                document.getElementById('service-list').innerHTML = html || '<div class="list-item">No services</div>';
+            } catch (err) {
+                console.error('Failed to load services:', err);
+            }
+        }
+
+        async function loadRegions() {
+            try {
+                const data = await fetchJson('/api/regions');
+                const select = document.getElementById('region-filter');
+                select.innerHTML = '<option value="">All Regions</option>' +
+                    data.regions.map(r => `<option value="${r}">${r}</option>`).join('');
+            } catch (err) {
+                console.error('Failed to load regions:', err);
+            }
+        }
+
+        async function loadFleets() {
+            try {
+                const data = await fetchJson('/api/fleets');
+                const fleetIds = [...new Set(data.fleets.map(f => f.fleet_id))].sort();
+                const select = document.getElementById('fleet-filter');
+                select.innerHTML = '<option value="">All Fleets</option>' +
+                    fleetIds.map(f => `<option value="${f}">${f}</option>`).join('');
+            } catch (err) {
+                console.error('Failed to load fleets:', err);
+            }
+        }
+
+        async function loadVehicles(page = 1) {
+            currentPage = page;
+            const search = document.getElementById('search-input').value;
+            const region = document.getElementById('region-filter').value;
+            const fleet = document.getElementById('fleet-filter').value;
+
+            let url = `/api/vehicles?page=${page}&per_page=20`;
+            if (search) url += `&search=${encodeURIComponent(search)}`;
+            if (region) url += `&region=${encodeURIComponent(region)}`;
+            if (fleet) url += `&fleet=${encodeURIComponent(fleet)}`;
+
+            try {
+                const data = await fetchJson(url);
+                const tbody = document.getElementById('vehicle-table');
+
+                if (data.vehicles.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="7" class="loading">No vehicles found</td></tr>';
+                } else {
+                    tbody.innerHTML = data.vehicles.map(v => `
+                        <tr>
+                            <td><a href="#" class="vehicle-link" onclick="showVehicle('${v.vehicle_id}')">${v.vehicle_id}</a></td>
+                            <td>${v.fleet_id || '-'}</td>
+                            <td>${v.region || '-'}</td>
+                            <td>${v.model || '-'}</td>
+                            <td>${v.year || '-'}</td>
+                            <td><span class="badge ${v.service_count > 0 ? 'success' : ''}">${v.service_count}</span></td>
+                            <td>${v.job_count}</td>
+                        </tr>
+                    `).join('');
+                }
+
+                // Pagination
+                const pagination = document.getElementById('pagination');
+                pagination.innerHTML = `
+                    <button ${page <= 1 ? 'disabled' : ''} onclick="loadVehicles(${page - 1})">Previous</button>
+                    <span class="page-info">Page ${page} of ${data.pages} (${data.total} vehicles)</span>
+                    <button ${page >= data.pages ? 'disabled' : ''} onclick="loadVehicles(${page + 1})">Next</button>
+                `;
+            } catch (err) {
+                console.error('Failed to load vehicles:', err);
+                document.getElementById('vehicle-table').innerHTML =
+                    '<tr><td colspan="7" class="error">Failed to load vehicles</td></tr>';
+            }
+        }
+
+        async function showVehicle(vehicleId) {
+            document.getElementById('modal-title').textContent = vehicleId;
+            document.getElementById('modal-body').innerHTML = '<div class="loading">Loading...</div>';
+            document.getElementById('vehicle-modal').classList.add('active');
+
+            try {
+                const data = await fetchJson(`/api/vehicles/${vehicleId}`);
+                const e = data.enrichment;
+
+                let html = `
+                    <div class="detail-section">
+                        <h3>Enrichment Data</h3>
+                        <div class="detail-grid">
+                            <div class="detail-item">
+                                <div class="label">Fleet ID</div>
+                                <div class="value">${e.fleet_id || '-'}</div>
+                            </div>
+                            <div class="detail-item">
+                                <div class="label">Region</div>
+                                <div class="value">${e.region || '-'}</div>
+                            </div>
+                            <div class="detail-item">
+                                <div class="label">Model</div>
+                                <div class="value">${e.model || '-'}</div>
+                            </div>
+                            <div class="detail-item">
+                                <div class="label">Year</div>
+                                <div class="value">${e.year || '-'}</div>
+                            </div>
+                            <div class="detail-item">
+                                <div class="label">Owner</div>
+                                <div class="value">${e.owner || '-'}</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="detail-section">
+                        <h3>Registered Services (${data.services.length})</h3>
+                        <ul class="service-list">
+                            ${data.services.length > 0 ?
+                                data.services.map(s => `
+                                    <li>
+                                        <span>${s.service_name} ${s.version ? 'v' + s.version : ''}</span>
+                                        <span class="badge">${s.status === 0 ? 'Available' : 'Status ' + s.status}</span>
+                                    </li>
+                                `).join('') :
+                                '<li>No services registered</li>'
+                            }
+                        </ul>
+                    </div>
+
+                    <div class="detail-section">
+                        <h3>Scheduled Jobs (${data.jobs.length})</h3>
+                        <ul class="job-list">
+                            ${data.jobs.length > 0 ?
+                                data.jobs.map(j => `
+                                    <li>
+                                        <span>${j.title || j.job_id}</span>
+                                        <span class="badge">${j.status || 'pending'}</span>
+                                    </li>
+                                `).join('') :
+                                '<li>No jobs scheduled</li>'
+                            }
+                        </ul>
+                    </div>
+                `;
+
+                document.getElementById('modal-body').innerHTML = html;
+            } catch (err) {
+                document.getElementById('modal-body').innerHTML =
+                    '<div class="error">Failed to load vehicle details</div>';
+            }
+        }
+
+        function closeModal() {
+            document.getElementById('vehicle-modal').classList.remove('active');
+        }
+
+        function handleSearch(event) {
+            clearTimeout(searchTimeout);
+            searchTimeout = setTimeout(() => loadVehicles(1), 300);
+        }
+
+        function refreshAll() {
+            loadStats();
+            loadServices();
+            loadVehicles(currentPage);
+        }
+
+        // Close modal on overlay click
+        document.getElementById('vehicle-modal').addEventListener('click', (e) => {
+            if (e.target.classList.contains('modal-overlay')) {
+                closeModal();
+            }
+        });
+
+        // Close modal on Escape
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') closeModal();
+        });
+
+        // ===========================================
+        // RPC Functions
+        // ===========================================
+
+        async function dispatchRpc(event) {
+            event.preventDefault();
+
+            const vehicleId = document.getElementById('rpc-vehicle').value;
+            const serviceName = document.getElementById('rpc-service').value;
+            const methodName = document.getElementById('rpc-method').value;
+            const paramsText = document.getElementById('rpc-params').value;
+            const resultDiv = document.getElementById('rpc-result');
+
+            let parameters;
+            try {
+                parameters = JSON.parse(paramsText || '{}');
+            } catch (e) {
+                resultDiv.innerHTML = `<div class="result-box error">Invalid JSON parameters: ${e.message}</div>`;
+                resultDiv.style.display = 'block';
+                return false;
+            }
+
+            resultDiv.innerHTML = '<div class="result-box">Sending RPC...</div>';
+            resultDiv.style.display = 'block';
+
+            try {
+                const response = await fetch('/api/rpc', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        vehicle_id: vehicleId,
+                        service_name: serviceName,
+                        method_name: methodName,
+                        parameters: parameters,
+                        timeout_ms: 5000
+                    })
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    resultDiv.innerHTML = `<div class="result-box success">RPC Dispatched!\n\nCorrelation ID: ${data.correlation_id}\nTopic: ${data.topic}\nStatus: ${data.status}</div>`;
+                } else {
+                    resultDiv.innerHTML = `<div class="result-box error">Error: ${data.error}</div>`;
+                }
+            } catch (err) {
+                resultDiv.innerHTML = `<div class="result-box error">Request failed: ${err.message}</div>`;
+            }
+
+            return false;
+        }
+
+        async function checkMqttStatus() {
+            try {
+                const response = await fetch('/api/health');
+                const data = await response.json();
+                const badge = document.getElementById('mqtt-status');
+                if (data.mqtt_connected) {
+                    badge.textContent = 'MQTT: Connected';
+                    badge.className = 'badge success';
+                } else {
+                    badge.textContent = 'MQTT: Disconnected';
+                    badge.className = 'badge';
+                }
+            } catch (err) {
+                document.getElementById('mqtt-status').textContent = 'MQTT: Unknown';
+            }
+        }
+
+        // ===========================================
+        // Scheduler Functions
+        // ===========================================
+
+        async function scheduleJob(event) {
+            event.preventDefault();
+
+            const vehicleId = document.getElementById('schedule-vehicle').value;
+            const title = document.getElementById('schedule-title').value;
+            const serviceName = document.getElementById('schedule-service').value;
+            const methodName = document.getElementById('schedule-method').value;
+            const paramsText = document.getElementById('schedule-params').value;
+            const recurrence = document.getElementById('schedule-recurrence').value;
+            const resultDiv = document.getElementById('schedule-result');
+
+            let parameters;
+            try {
+                parameters = JSON.parse(paramsText || '{}');
+            } catch (e) {
+                resultDiv.innerHTML = `<div class="result-box error">Invalid JSON parameters: ${e.message}</div>`;
+                resultDiv.style.display = 'block';
+                return false;
+            }
+
+            resultDiv.innerHTML = '<div class="result-box">Scheduling job...</div>';
+            resultDiv.style.display = 'block';
+
+            try {
+                const response = await fetch('/api/schedule', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        vehicle_id: vehicleId,
+                        title: title || `${serviceName}.${methodName}`,
+                        service_name: serviceName,
+                        method_name: methodName,
+                        parameters: parameters,
+                        recurrence_rule: recurrence
+                    })
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    resultDiv.innerHTML = `<div class="result-box success">Job Scheduled!\n\nJob ID: ${data.job_id}\nTopic: ${data.topic}\nStatus: ${data.status}</div>`;
+                } else {
+                    resultDiv.innerHTML = `<div class="result-box error">Error: ${data.error}</div>`;
+                }
+            } catch (err) {
+                resultDiv.innerHTML = `<div class="result-box error">Request failed: ${err.message}</div>`;
+            }
+
+            return false;
+        }
+
+        // ===========================================
+        // Initial load
+        // ===========================================
+        loadStats();
+        loadServices();
+        loadRegions();
+        loadFleets();
+        loadVehicles();
+        checkMqttStatus();
+
+        // Auto-refresh every 10 seconds
+        setInterval(refreshAll, 10000);
+        setInterval(checkMqttStatus, 5000);
+    </script>
+</body>
+</html>

@@ -1,0 +1,49 @@
+# Build stage
+FROM ubuntu:24.04 AS builder
+
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    cmake \
+    pkg-config \
+    libprotobuf-dev \
+    protobuf-compiler \
+    libgrpc++-dev \
+    protobuf-compiler-grpc \
+    librdkafka-dev \
+    libpq-dev \
+    libpaho-mqttpp-dev \
+    libpaho-mqtt3as-dev \
+    libgoogle-glog-dev \
+    libgflags-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+COPY . .
+
+RUN mkdir -p build && cd build && \
+    cmake .. -DCMAKE_BUILD_TYPE=Release && \
+    make -j$(nproc) cloud_discovery cloud_dispatcher cloud_scheduler
+
+# Runtime stage
+FROM ubuntu:24.04
+
+RUN apt-get update && apt-get install -y \
+    libprotobuf32t64 \
+    libgrpc++1.51t64 \
+    librdkafka1 \
+    libpq5 \
+    libpaho-mqttpp3-1t64 \
+    libpaho-mqtt3as1t64 \
+    libgoogle-glog0v6t64 \
+    libgflags2.2 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /build/build/cloud_discovery /usr/local/bin/
+COPY --from=builder /build/build/cloud_dispatcher /usr/local/bin/
+COPY --from=builder /build/build/cloud_scheduler /usr/local/bin/
+
+# Default to cloud_discovery, can be overridden
+ARG SERVICE=cloud_discovery
+ENV SERVICE_NAME=${SERVICE}
+
+ENTRYPOINT ["/bin/sh", "-c", "/usr/local/bin/${SERVICE_NAME}"]
