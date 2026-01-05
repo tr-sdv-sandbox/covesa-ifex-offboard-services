@@ -163,8 +163,12 @@ endif()
 add_executable(mqtt_kafka_bridge
     services/mqtt_kafka_bridge/main.cpp
 )
+target_include_directories(mqtt_kafka_bridge PRIVATE
+    libs/postgres_client/include
+)
 target_link_libraries(mqtt_kafka_bridge PRIVATE
     mqtt_kafka_router
+    postgres_client
     envelope_codec
     glog::glog
     gflags

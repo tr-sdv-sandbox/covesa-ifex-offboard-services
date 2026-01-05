@@ -173,3 +173,124 @@ Cloud Service ──▶ MQTT Broker ──▶ Vehicle (offline)
 2. **Command TTL** - Include expiry timestamp, vehicle ignores stale commands
 3. **Retry mechanism** - Cloud retries unacked commands with exponential backoff
 4. **Offline queue visibility** - API to query pending commands for a vehicle
+
+## Vehicle Online/Offline Status Tracking
+
+Tracks vehicle connection status using MQTT Last Will and Testament (LWT) and heartbeat timeout.
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              VEHICLE                                        │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ Backend Transport (mqtt_client.cpp)                                  │   │
+│  │                                                                      │   │
+│  │  Connect:                                                            │   │
+│  │    1. mosquitto_will_set(topic, "0", retain=true)  ← LWT            │   │
+│  │    2. mosquitto_connect()                                            │   │
+│  │    3. mosquitto_publish(topic, "1", retain=true)   ← Online         │   │
+│  │                                                                      │   │
+│  │  topic = "v2c/{vehicle_id}/is_online"                               │   │
+│  └──────────────────────────────┬──────────────────────────────────────┘   │
+└─────────────────────────────────┼───────────────────────────────────────────┘
+                                  │ MQTT (QoS 1, retained)
+                                  ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           MOSQUITTO BROKER                                  │
+│  - Stores retained message per topic                                        │
+│  - On clean disconnect: does nothing                                        │
+│  - On unexpected disconnect: publishes LWT ("0")                           │
+└─────────────────────────────────┬───────────────────────────────────────────┘
+                                  │ Subscribed: v2c/#
+                                  ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         mqtt_kafka_bridge                                   │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ mqtt_kafka_router.cpp:on_message()                                   │   │
+│  │                                                                      │   │
+│  │  if topic.ends_with("/is_online"):                                  │   │
+│  │    vehicle_id = extract_from_topic(topic)                           │   │
+│  │    is_online = (payload == "1")                                     │   │
+│  │    ┌──────────────────────────────────────────────────────────┐     │   │
+│  │    │ produce(kafka_topic_status, vehicle_id, payload)         │─────┼───┼──▶ Kafka
+│  │    └──────────────────────────────────────────────────────────┘     │   │
+│  │    ┌──────────────────────────────────────────────────────────┐     │   │
+│  │    │ status_callback_(vehicle_id, is_online)                  │     │   │
+│  │    └─────────────────────────┬────────────────────────────────┘     │   │
+│  └──────────────────────────────┼──────────────────────────────────────┘   │
+│                                 │                                           │
+│  ┌──────────────────────────────┼──────────────────────────────────────┐   │
+│  │ main.cpp (status callback)   ▼                                       │   │
+│  │                                                                      │   │
+│  │  db->execute(                                                        │   │
+│  │    "INSERT INTO vehicles (vehicle_id, is_online, last_seen_at)      │   │
+│  │     VALUES ($1, $2, NOW())                                          │   │
+│  │     ON CONFLICT (vehicle_id) DO UPDATE                              │   │
+│  │     SET is_online = $2, last_seen_at = NOW()",                      │   │
+│  │    {vehicle_id, is_online})                                         │   │
+│  └──────────────────────────────┬──────────────────────────────────────┘   │
+└─────────────────────────────────┼───────────────────────────────────────────┘
+                                  │ SQL (libpq)
+                                  ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                            POSTGRESQL                                       │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ vehicles                                                             │   │
+│  │ ┌────────────────────┬───────────┬──────────────────────────────┐   │   │
+│  │ │ vehicle_id         │ is_online │ last_seen_at                 │   │   │
+│  │ ├────────────────────┼───────────┼──────────────────────────────┤   │   │
+│  │ │ VIN00000000000001  │ true      │ 2026-01-05 08:30:00+00       │   │   │
+│  │ │ VIN00000000000002  │ false     │ 2026-01-05 08:25:00+00       │   │   │
+│  │ └────────────────────┴───────────┴──────────────────────────────┘   │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Code Path
+
+| Step | File | Function/Code |
+|------|------|---------------|
+| 1. Set LWT | `mqtt_client.cpp:87` | `mosquitto_will_set(topic, "0", QoS=1, retain=true)` |
+| 2. Publish online | `mqtt_client.cpp:292` | `mosquitto_publish(topic, "1", QoS=1, retain=true)` |
+| 3. Receive MQTT | `mqtt_kafka_router.cpp:218` | `message_arrived()` → `on_message()` |
+| 4. Detect suffix | `mqtt_kafka_router.cpp:383-386` | `topic.ends_with("/is_online")` |
+| 5. Extract vehicle | `mqtt_kafka_router.cpp:389-391` | Parse `v2c/{vehicle_id}/is_online` |
+| 6. Kafka produce | `mqtt_kafka_router.cpp:399-403` | `produce(status_kafka_topic_, ...)` |
+| 7. DB callback | `mqtt_kafka_router.cpp:407-408` | `status_callback_(vehicle_id, is_online)` |
+| 8. SQL upsert | `main.cpp:331-335` | `INSERT ... ON CONFLICT DO UPDATE` |
+
+### Heartbeat Timeout
+
+A background thread marks vehicles offline if no messages received:
+
+```cpp
+// main.cpp:347-365
+while (g_running) {
+    db->execute(
+        "UPDATE vehicles SET is_online = false "
+        "WHERE is_online = true AND last_seen_at < NOW() - INTERVAL '$1 seconds'",
+        {FLAGS_heartbeat_timeout_s});
+    sleep(FLAGS_heartbeat_check_interval_s);
+}
+```
+
+### Configuration
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--kafka_topic_status` | ifex.status | Kafka topic for status messages |
+| `--heartbeat_timeout_s` | 60 | Seconds without message before marking offline |
+| `--heartbeat_check_interval_s` | 10 | Interval between timeout checks |
+| `--postgres_host` | localhost | PostgreSQL host for status updates |
+
+### Testing
+
+```bash
+# E2E tests (requires infrastructure)
+cd deploy && ./start-infra.sh
+cd ../build && ./tests/status_e2e_test
+
+# Query database
+./deploy/query-db.sh "SELECT vehicle_id, is_online, last_seen_at FROM vehicles WHERE is_online = true LIMIT 10"
+```

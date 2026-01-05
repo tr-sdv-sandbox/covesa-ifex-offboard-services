@@ -50,15 +50,14 @@ Vehicle(s)                           Cloud (Docker Compose)
 ### 1. Start Infrastructure
 
 ```bash
-cd docker
-docker compose up -d
+cd deploy
+./start-infra.sh
 
 # Verify services are running
-docker compose ps
+docker ps
 
-# Optional: Start Kafka UI for debugging
-docker compose --profile debug up -d
-# Access at http://localhost:8080
+# Stop infrastructure
+./stop-infra.sh
 ```
 
 ### 2. Build Services
@@ -107,6 +106,32 @@ Routes MQTT messages to Kafka topics based on content_id:
 | v2c/{vin}/200 | ifex.rpc.200 | RPC responses |
 | v2c/{vin}/201 | ifex.discovery.201 | Service registry sync |
 | v2c/{vin}/202 | ifex.scheduler.202 | Scheduler state sync |
+| v2c/{vin}/is_online | ifex.status | Vehicle online/offline status |
+
+#### Vehicle Online/Offline Status
+
+Tracks vehicle connection status and updates PostgreSQL:
+
+```
+Vehicle publishes ──▶ v2c/{vehicle_id}/is_online ──▶ mqtt_kafka_bridge
+    "1" or "0"              (retained)                     │
+                                                           ├──▶ Kafka (ifex.status)
+                                                           │
+                                                           └──▶ PostgreSQL
+                                                                UPDATE vehicles
+                                                                SET is_online = true/false
+```
+
+| Trigger | Action |
+|---------|--------|
+| Vehicle connects | Publishes `1`, bridge sets `is_online=true` |
+| Vehicle crashes | Broker publishes LWT `0`, bridge sets `is_online=false` |
+| Heartbeat timeout | Background thread sets `is_online=false` after 60s silence |
+
+Configuration flags:
+- `--kafka_topic_status` - Kafka topic (default: `ifex.status`)
+- `--heartbeat_timeout_s` - Seconds before marking offline (default: 60)
+- `--heartbeat_check_interval_s` - Check interval (default: 10)
 
 ### discovery_mirror
 
@@ -133,15 +158,20 @@ Consumes `ifex.rpc.200` and tracks RPC request/response lifecycle:
 
 ```sql
 -- Key tables
-vehicles          -- Known vehicles
+vehicles          -- Known vehicles (vehicle_id, is_online, last_seen_at)
 services          -- Service registry per vehicle
 jobs              -- Scheduled jobs per vehicle
 job_executions    -- Job execution history
 rpc_requests      -- RPC request/response tracking
 sync_state        -- Per-vehicle sync sequence tracking
+vehicle_enrichment -- Fleet assignment, region, model (exported to Kafka)
 ```
 
-See `sql/schema.sql` for full schema.
+Key columns in `vehicles`:
+- `is_online` (BOOLEAN) - Current connection status
+- `last_seen_at` (TIMESTAMPTZ) - Last message timestamp
+
+See `deploy/init-db/01-schema.sql` for full schema.
 
 ## Configuration
 

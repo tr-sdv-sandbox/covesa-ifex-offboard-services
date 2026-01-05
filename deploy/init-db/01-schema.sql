@@ -18,6 +18,43 @@ CREATE TABLE vehicles (
 COMMENT ON TABLE vehicles IS 'Tracked vehicles from discovery sync';
 
 -- =============================================================================
+-- Vehicle enrichment data (fleet assignment, region, etc.)
+-- This is the source of truth for cloud-side vehicle metadata
+-- Changes are exported to Kafka for consumption by mqtt_kafka_bridge
+-- =============================================================================
+CREATE TABLE vehicle_enrichment (
+    vehicle_id VARCHAR(64) PRIMARY KEY REFERENCES vehicles(vehicle_id) ON DELETE CASCADE,
+    fleet_id VARCHAR(64),
+    region VARCHAR(32),
+    model VARCHAR(64),
+    year INTEGER,
+    owner VARCHAR(128),
+    tags JSONB DEFAULT '[]'::jsonb,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+COMMENT ON TABLE vehicle_enrichment IS 'Vehicle enrichment data exported to Kafka for MQTT bridge';
+
+CREATE INDEX idx_vehicle_enrichment_fleet ON vehicle_enrichment(fleet_id);
+CREATE INDEX idx_vehicle_enrichment_region ON vehicle_enrichment(region);
+CREATE INDEX idx_vehicle_enrichment_updated ON vehicle_enrichment(updated_at);
+
+-- Trigger to auto-update updated_at on any change
+CREATE OR REPLACE FUNCTION update_enrichment_timestamp()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = NOW();
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_vehicle_enrichment_updated
+    BEFORE UPDATE ON vehicle_enrichment
+    FOR EACH ROW
+    EXECUTE FUNCTION update_enrichment_timestamp();
+
+-- =============================================================================
 -- Services registry (from content_id=201)
 -- =============================================================================
 CREATE TABLE services (

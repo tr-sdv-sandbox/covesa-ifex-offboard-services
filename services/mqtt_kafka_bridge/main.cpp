@@ -11,11 +11,14 @@
 
 #include <csignal>
 #include <memory>
+#include <thread>
 
 #include <gflags/gflags.h>
 #include <glog/logging.h>
 
 #include "mqtt_kafka_router.hpp"
+#include "enrichment_consumer.hpp"
+#include "postgres_client.hpp"
 
 // Vehicle-side codecs (decode incoming)
 #include "discovery_codec.hpp"
@@ -39,22 +42,45 @@ DEFINE_string(mqtt_topic, "v2c/#", "MQTT topic pattern to subscribe to");
 DEFINE_string(kafka_broker, "localhost:9092", "Kafka broker address");
 DEFINE_string(kafka_client_id, "mqtt-kafka-bridge", "Kafka client ID");
 
-// Topic configuration
-DEFINE_string(kafka_topic_rpc, "ifex.rpc.200", "Kafka topic for RPC (content_id=200)");
+// v2c topic configuration (vehicle-to-cloud)
+DEFINE_string(kafka_topic_rpc, "ifex.rpc.200", "Kafka topic for RPC responses (content_id=200)");
 DEFINE_string(kafka_topic_discovery, "ifex.discovery.201", "Kafka topic for discovery (content_id=201)");
 DEFINE_string(kafka_topic_scheduler, "ifex.scheduler.202", "Kafka topic for scheduler (content_id=202)");
 
+// c2v topic configuration (cloud-to-vehicle)
+DEFINE_string(kafka_topic_c2v_rpc, "ifex.c2v.rpc", "Kafka topic for RPC requests to vehicles");
+DEFINE_string(kafka_topic_c2v_scheduler, "ifex.c2v.scheduler", "Kafka topic for scheduler commands to vehicles");
+DEFINE_string(kafka_c2v_group_id, "mqtt-kafka-bridge-c2v", "Consumer group ID for c2v topics");
+
+// Enrichment configuration
+DEFINE_string(kafka_topic_enrichment, "ifex.vehicle.enrichment", "Kafka topic for vehicle enrichment");
+DEFINE_int32(enrichment_load_timeout_s, 30, "Timeout for initial enrichment load (seconds)");
+
 // Behavior flags
 DEFINE_bool(require_vehicle_context, false, "Require vehicle to be known (drop unknown)");
+
+// Status tracking
+DEFINE_string(kafka_topic_status, "ifex.status", "Kafka topic for vehicle status (is_online)");
+DEFINE_int32(heartbeat_timeout_s, 60, "Seconds without message before marking vehicle offline");
+DEFINE_int32(heartbeat_check_interval_s, 10, "Interval between heartbeat timeout checks");
+
+// PostgreSQL flags
+DEFINE_string(postgres_host, "localhost", "PostgreSQL host");
+DEFINE_int32(postgres_port, 5432, "PostgreSQL port");
+DEFINE_string(postgres_db, "ifex_offboard", "PostgreSQL database name");
+DEFINE_string(postgres_user, "ifex", "PostgreSQL user");
+DEFINE_string(postgres_password, "ifex_dev", "PostgreSQL password");
 
 // Bridge identification
 DEFINE_string(bridge_id, "mqtt-kafka-bridge-1", "Bridge instance ID for tracking");
 
 // Global router instance for signal handling
 ifex::offboard::MqttKafkaRouter* g_router = nullptr;
+std::atomic<bool> g_running{true};
 
 void signal_handler(int signum) {
     LOG(INFO) << "Received signal " << signum << ", shutting down...";
+    g_running = false;
     if (g_router) {
         g_router->stop();
     }
@@ -223,6 +249,7 @@ int main(int argc, char* argv[]) {
     ifex::offboard::KafkaRouterConfig kafka_config;
     kafka_config.brokers = FLAGS_kafka_broker;
     kafka_config.client_id = FLAGS_kafka_client_id;
+    kafka_config.c2v_group_id = FLAGS_kafka_c2v_group_id;
 
     // Create router
     ifex::offboard::MqttKafkaRouter router(mqtt_config, kafka_config);
@@ -230,10 +257,30 @@ int main(int argc, char* argv[]) {
 
     // Create vehicle context store (for enrichment)
     auto context_store = std::make_shared<ifex::offboard::VehicleContextStore>();
+
+    // Configure and start enrichment consumer
+    ifex::offboard::EnrichmentConsumerConfig enrichment_config;
+    enrichment_config.brokers = FLAGS_kafka_broker;
+    enrichment_config.topic = FLAGS_kafka_topic_enrichment;
+    enrichment_config.initial_load_timeout = std::chrono::seconds(FLAGS_enrichment_load_timeout_s);
+    enrichment_config.group_id = FLAGS_kafka_client_id + "-enrichment";
+    enrichment_config.client_id = FLAGS_kafka_client_id + "-enrichment";
+
+    ifex::offboard::EnrichmentConsumer enrichment_consumer(enrichment_config, context_store);
+
+    // Load initial enrichment data (blocking)
+    LOG(INFO) << "Loading vehicle enrichment from " << FLAGS_kafka_topic_enrichment << "...";
+    size_t loaded = enrichment_consumer.load_initial();
+    LOG(INFO) << "Loaded " << loaded << " enrichment records for " << context_store->size() << " vehicles";
+
+    // Start background consumer for updates
+    enrichment_consumer.start_background();
+
+    // Connect context store to router
     router.set_context_store(context_store);
     router.set_require_context(FLAGS_require_vehicle_context);
 
-    // Register handlers for each content_id
+    // Register v2c handlers for each content_id (vehicle-to-cloud)
     // All messages are transformed to offboard format with vehicle_id and enrichment
     router.register_handler(200, FLAGS_kafka_topic_rpc,
                             make_rpc_transform(FLAGS_bridge_id));
@@ -242,23 +289,125 @@ int main(int argc, char* argv[]) {
     router.register_handler(202, FLAGS_kafka_topic_scheduler,
                             make_scheduler_transform(FLAGS_bridge_id));
 
-    LOG(INFO) << "Registered handlers:";
-    LOG(INFO) << "  200 -> " << FLAGS_kafka_topic_rpc;
-    LOG(INFO) << "  201 -> " << FLAGS_kafka_topic_discovery;
-    LOG(INFO) << "  202 -> " << FLAGS_kafka_topic_scheduler;
+    LOG(INFO) << "Registered v2c handlers (MQTT -> Kafka):";
+    LOG(INFO) << "  v2c/*/200 -> " << FLAGS_kafka_topic_rpc;
+    LOG(INFO) << "  v2c/*/201 -> " << FLAGS_kafka_topic_discovery;
+    LOG(INFO) << "  v2c/*/202 -> " << FLAGS_kafka_topic_scheduler;
+
+    // Register c2v handlers (cloud-to-vehicle)
+    // These consume from Kafka and publish to MQTT c2v topics
+    // Default transform: Kafka message key = vehicle_id, value = payload (passthrough)
+    router.register_c2v_handler(FLAGS_kafka_topic_c2v_rpc, 200);      // RPC requests
+    router.register_c2v_handler(FLAGS_kafka_topic_c2v_scheduler, 202); // Scheduler commands
+
+    LOG(INFO) << "Registered c2v handlers (Kafka -> MQTT):";
+    LOG(INFO) << "  " << FLAGS_kafka_topic_c2v_rpc << " -> c2v/*/200";
+    LOG(INFO) << "  " << FLAGS_kafka_topic_c2v_scheduler << " -> c2v/*/202";
+
+    // Initialize PostgreSQL for status updates
+    ifex::offboard::PostgresConfig pg_config;
+    pg_config.host = FLAGS_postgres_host;
+    pg_config.port = FLAGS_postgres_port;
+    pg_config.database = FLAGS_postgres_db;
+    pg_config.user = FLAGS_postgres_user;
+    pg_config.password = FLAGS_postgres_password;
+
+    auto db = std::make_shared<ifex::offboard::PostgresClient>(pg_config);
+    if (!db->is_connected()) {
+        LOG(WARNING) << "Failed to connect to PostgreSQL - status updates will not be persisted";
+    } else {
+        LOG(INFO) << "PostgreSQL connected: " << FLAGS_postgres_host << ":" << FLAGS_postgres_port
+                  << "/" << FLAGS_postgres_db;
+    }
+
+    // Register status handler for vehicle online/offline detection
+    // Updates both Kafka and PostgreSQL
+    router.set_status_handler(FLAGS_kafka_topic_status,
+        [&db](const std::string& vehicle_id, bool is_online) {
+            LOG(INFO) << "Vehicle " << vehicle_id << " is_online=" << is_online;
+
+            if (db && db->is_connected()) {
+                // Upsert vehicle with online status
+                auto result = db->execute(
+                    "INSERT INTO vehicles (vehicle_id, is_online, last_seen_at) "
+                    "VALUES ($1, $2, NOW()) "
+                    "ON CONFLICT (vehicle_id) DO UPDATE SET is_online = $2, last_seen_at = NOW()",
+                    {vehicle_id, is_online ? "true" : "false"});
+
+                if (!result.ok()) {
+                    LOG(ERROR) << "Failed to update vehicle status: " << result.error();
+                }
+            }
+        });
+
+    LOG(INFO) << "Registered status handler: v2c/*/is_online -> " << FLAGS_kafka_topic_status;
+
+    // Start heartbeat timeout thread
+    // Marks vehicles offline if no messages received for heartbeat_timeout_s seconds
+    std::thread heartbeat_thread([&db]() {
+        LOG(INFO) << "Heartbeat timeout thread started (timeout=" << FLAGS_heartbeat_timeout_s
+                  << "s, interval=" << FLAGS_heartbeat_check_interval_s << "s)";
+
+        while (g_running) {
+            std::this_thread::sleep_for(std::chrono::seconds(FLAGS_heartbeat_check_interval_s));
+
+            if (!g_running) break;
+
+            if (db && db->is_connected()) {
+                std::string timeout_interval = std::to_string(FLAGS_heartbeat_timeout_s) + " seconds";
+                auto result = db->execute(
+                    "UPDATE vehicles SET is_online = false "
+                    "WHERE is_online = true AND last_seen_at < NOW() - INTERVAL '" + timeout_interval + "'");
+
+                if (!result.ok()) {
+                    LOG(ERROR) << "Heartbeat timeout check failed: " << result.error();
+                } else if (result.affected_rows() > 0) {
+                    LOG(INFO) << "Heartbeat timeout: marked " << result.affected_rows()
+                              << " vehicles offline";
+                }
+            }
+        }
+
+        LOG(INFO) << "Heartbeat timeout thread stopped";
+    });
 
     // Run the router (blocking)
     router.run();
 
+    // Stop heartbeat thread
+    if (heartbeat_thread.joinable()) {
+        heartbeat_thread.join();
+    }
+
+    // Stop enrichment consumer
+    enrichment_consumer.stop();
+
     // Print final stats
     const auto& stats = router.stats();
-    LOG(INFO) << "Final stats:";
+    const auto& enrichment_stats = enrichment_consumer.stats();
+    LOG(INFO) << "Final stats (v2c - MQTT->Kafka):";
     LOG(INFO) << "  messages_received=" << stats.messages_received;
     LOG(INFO) << "  messages_transformed=" << stats.messages_transformed;
     LOG(INFO) << "  messages_produced=" << stats.messages_produced;
     LOG(INFO) << "  messages_dropped=" << stats.messages_dropped;
     LOG(INFO) << "  transform_errors=" << stats.transform_errors;
     LOG(INFO) << "  produce_errors=" << stats.produce_errors;
+    LOG(INFO) << "Final stats (status - is_online):";
+    LOG(INFO) << "  status_messages_received=" << stats.status_messages_received;
+    LOG(INFO) << "  status_messages_produced=" << stats.status_messages_produced;
+    LOG(INFO) << "Final stats (c2v - Kafka->MQTT):";
+    LOG(INFO) << "  c2v_messages_received=" << stats.c2v_messages_received;
+    LOG(INFO) << "  c2v_messages_transformed=" << stats.c2v_messages_transformed;
+    LOG(INFO) << "  c2v_messages_published=" << stats.c2v_messages_published;
+    LOG(INFO) << "  c2v_messages_dropped=" << stats.c2v_messages_dropped;
+    LOG(INFO) << "  c2v_transform_errors=" << stats.c2v_transform_errors;
+    LOG(INFO) << "  c2v_publish_errors=" << stats.c2v_publish_errors;
+    LOG(INFO) << "Enrichment stats:";
+    LOG(INFO) << "  enrichment_messages=" << enrichment_stats.messages_received;
+    LOG(INFO) << "  enrichment_updates=" << enrichment_stats.updates_applied;
+    LOG(INFO) << "  enrichment_tombstones=" << enrichment_stats.tombstones_applied;
+    LOG(INFO) << "  enrichment_errors=" << enrichment_stats.parse_errors;
+    LOG(INFO) << "  vehicles_known=" << context_store->size();
 
     LOG(INFO) << "Goodbye!";
     return 0;
