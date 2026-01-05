@@ -441,15 +441,312 @@
             border-color: #f5c6cb;
             color: #721c24;
         }
+
+        /* Tab Navigation */
+        .tab-nav {
+            display: flex;
+            gap: 0.25rem;
+        }
+
+        .tab-btn {
+            background: rgba(255,255,255,0.1);
+            border: 1px solid rgba(255,255,255,0.2);
+            color: rgba(255,255,255,0.7);
+            padding: 0.5rem 1rem;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .tab-btn:hover {
+            background: rgba(255,255,255,0.2);
+            color: white;
+        }
+
+        .tab-btn.active {
+            background: rgba(255,255,255,0.2);
+            color: white;
+            border-color: rgba(255,255,255,0.4);
+        }
+
+        .tab-content {
+            display: block;
+        }
+
+        /* Service Explorer Layout */
+        .service-explorer {
+            display: grid;
+            grid-template-columns: 300px 1fr;
+            gap: 1.5rem;
+            min-height: 500px;
+        }
+
+        .service-sidebar .panel-body {
+            max-height: 500px;
+            overflow-y: auto;
+        }
+
+        .service-item {
+            padding: 0.5rem 1rem;
+            border-bottom: 1px solid #f0f0f0;
+            cursor: pointer;
+        }
+
+        .service-item:hover {
+            background: #f8f9fa;
+        }
+
+        .service-item.expanded {
+            background: #f0f4ff;
+        }
+
+        .service-item .service-name {
+            font-weight: 600;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .service-item .service-name .arrow {
+            transition: transform 0.2s;
+        }
+
+        .service-item.expanded .arrow {
+            transform: rotate(90deg);
+        }
+
+        .method-list {
+            margin-left: 1rem;
+            padding: 0.5rem 0;
+            display: none;
+        }
+
+        .service-item.expanded .method-list {
+            display: block;
+        }
+
+        .method-item {
+            padding: 0.35rem 0.5rem;
+            font-size: 0.875rem;
+            border-radius: 4px;
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .method-item:hover {
+            background: #e9ecef;
+        }
+
+        .method-item.selected {
+            background: #667eea;
+            color: white;
+        }
+
+        .method-item .schedulable-dot {
+            width: 8px;
+            height: 8px;
+            background: #28a745;
+            border-radius: 50%;
+        }
+
+        /* Form Tabs */
+        .form-tabs {
+            display: flex;
+            gap: 0.25rem;
+            border-bottom: 1px solid #e9ecef;
+            padding-bottom: 0.5rem;
+        }
+
+        .form-tab-btn {
+            background: none;
+            border: none;
+            padding: 0.25rem 0.75rem;
+            cursor: pointer;
+            color: #666;
+            border-radius: 4px;
+        }
+
+        .form-tab-btn:hover {
+            background: #f0f0f0;
+        }
+
+        .form-tab-btn.active {
+            background: #667eea;
+            color: white;
+        }
+
+        /* Dynamic Form Fields */
+        .field-group {
+            margin-bottom: 0.75rem;
+        }
+
+        .field-group label {
+            display: block;
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: #666;
+            margin-bottom: 0.25rem;
+        }
+
+        .field-group input,
+        .field-group select {
+            width: 100%;
+            padding: 0.5rem;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 0.875rem;
+        }
+
+        .field-group.struct {
+            border: 1px solid #e9ecef;
+            border-radius: 4px;
+            padding: 0.75rem;
+            margin-bottom: 0.75rem;
+        }
+
+        .field-group.struct > label {
+            font-size: 0.875rem;
+            color: #333;
+            margin-bottom: 0.5rem;
+        }
+
+        .checkbox-group {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+        }
+
+        .checkbox-group label {
+            display: flex;
+            align-items: center;
+            gap: 0.25rem;
+            font-weight: normal;
+            cursor: pointer;
+        }
+
+        /* Calendar Layout */
+        .calendar-layout {
+            display: grid;
+            grid-template-columns: 280px 1fr;
+            gap: 1.5rem;
+            min-height: 500px;
+        }
+
+        .calendar-vehicle-item {
+            padding: 0.5rem 1rem;
+            border-bottom: 1px solid #f0f0f0;
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .calendar-vehicle-item:hover {
+            background: #f8f9fa;
+        }
+
+        .calendar-vehicle-item.selected {
+            background: #f0f4ff;
+            border-left: 3px solid #667eea;
+        }
+
+        .online-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #dc3545;
+        }
+
+        .online-dot.online {
+            background: #28a745;
+        }
+
+        .job-card {
+            background: #f8f9fa;
+            border-radius: 4px;
+            padding: 0.75rem;
+            margin-bottom: 0.75rem;
+            border-left: 3px solid #667eea;
+        }
+
+        .job-card.pending {
+            border-left-color: #ffc107;
+            background: #fff9e6;
+        }
+
+        .job-card .job-title {
+            font-weight: 600;
+            margin-bottom: 0.25rem;
+        }
+
+        .job-card .job-meta {
+            font-size: 0.75rem;
+            color: #666;
+        }
+
+        .job-card .job-actions {
+            margin-top: 0.5rem;
+            display: flex;
+            gap: 0.5rem;
+        }
+
+        /* Dispatch Layout */
+        .quick-actions {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+            gap: 0.75rem;
+            margin-top: 1rem;
+        }
+
+        .quick-action-btn {
+            background: #f8f9fa;
+            border: 1px solid #e9ecef;
+            border-radius: 8px;
+            padding: 1rem;
+            cursor: pointer;
+            text-align: center;
+            transition: all 0.2s;
+        }
+
+        .quick-action-btn:hover {
+            background: #667eea;
+            color: white;
+            border-color: #667eea;
+        }
+
+        .quick-action-btn .icon {
+            font-size: 1.5rem;
+            margin-bottom: 0.25rem;
+        }
+
+        .quick-action-btn .label {
+            font-size: 0.75rem;
+        }
+
+        @media (max-width: 900px) {
+            .service-explorer,
+            .calendar-layout {
+                grid-template-columns: 1fr;
+            }
+        }
     </style>
 </head>
 <body>
     <header class="header">
         <h1>IFEX Fleet Dashboard</h1>
+        <nav class="tab-nav">
+            <button class="tab-btn active" onclick="switchTab('fleet')">Fleet</button>
+            <button class="tab-btn" onclick="switchTab('services')">Services</button>
+            <button class="tab-btn" onclick="switchTab('calendar')">Calendar</button>
+            <button class="tab-btn" onclick="switchTab('dispatch')">Dispatch</button>
+        </nav>
         <button class="refresh-btn" onclick="refreshAll()">Refresh</button>
     </header>
 
-    <div class="container">
+    <!-- Fleet Tab (existing content) -->
+    <div class="container tab-content" id="tab-fleet">
         <!-- Stats -->
         <div class="stats-grid" id="stats">
             <div class="stat-card highlight">
@@ -592,6 +889,152 @@
                 </tbody>
             </table>
             <div class="pagination" id="pagination"></div>
+        </div>
+    </div>
+
+    <!-- Services Tab -->
+    <div class="container tab-content" id="tab-services" style="display: none;">
+        <div class="service-explorer">
+            <div class="service-sidebar">
+                <div class="panel">
+                    <div class="panel-header">
+                        <span>Service Schemas</span>
+                        <button class="btn" onclick="loadSchemas()" style="padding: 0.25rem 0.5rem; font-size: 0.75rem;">↻</button>
+                    </div>
+                    <div class="panel-body" id="schema-list">
+                        <div class="loading">Loading...</div>
+                    </div>
+                </div>
+            </div>
+            <div class="service-main">
+                <div class="panel" id="method-panel" style="display: none;">
+                    <div class="panel-header">
+                        <span id="method-title">Select a method</span>
+                        <span class="badge" id="method-schedulable" style="display: none;">Schedulable</span>
+                    </div>
+                    <div class="panel-body" style="padding: 1rem;">
+                        <div id="method-description" style="color: #666; margin-bottom: 1rem;"></div>
+
+                        <div class="form-group">
+                            <label>Target Vehicle</label>
+                            <input type="text" id="service-vehicle" placeholder="VIN00000000000001">
+                        </div>
+
+                        <div id="dynamic-form"></div>
+
+                        <div class="form-tabs" style="margin: 1rem 0;">
+                            <button class="form-tab-btn active" onclick="switchFormView('form')">Form</button>
+                            <button class="form-tab-btn" onclick="switchFormView('json')">JSON</button>
+                        </div>
+
+                        <div id="json-view" style="display: none;">
+                            <div class="form-group">
+                                <label>Parameters (JSON)</label>
+                                <textarea id="service-params-json" rows="6" style="font-family: monospace;">{}</textarea>
+                            </div>
+                        </div>
+
+                        <div style="display: flex; gap: 0.5rem; margin-top: 1rem;">
+                            <button class="btn primary" onclick="executeNow()">Execute Now</button>
+                            <button class="btn" onclick="openScheduleModal()" id="btn-schedule">Schedule...</button>
+                        </div>
+
+                        <div id="service-result" style="margin-top: 1rem; display: none;"></div>
+                    </div>
+                </div>
+                <div class="panel" id="no-method-panel">
+                    <div class="panel-body" style="padding: 2rem; text-align: center; color: #666;">
+                        <p>Select a service and method from the sidebar to build a request.</p>
+                        <p style="margin-top: 1rem; font-size: 0.875rem;">
+                            Service schemas define the available methods and their parameters.<br>
+                            Use the dynamic form or JSON view to configure parameters.
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Calendar Tab -->
+    <div class="container tab-content" id="tab-calendar" style="display: none;">
+        <div class="calendar-layout">
+            <div class="calendar-sidebar">
+                <div class="panel">
+                    <div class="panel-header">Vehicles</div>
+                    <div class="panel-body">
+                        <div class="form-group" style="padding: 0.5rem;">
+                            <input type="text" id="calendar-vehicle-search" placeholder="Search vehicles..." onkeyup="searchCalendarVehicles()">
+                        </div>
+                        <div id="calendar-vehicle-list" style="max-height: 400px; overflow-y: auto;">
+                            <div class="loading">Loading...</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="calendar-main">
+                <div class="panel">
+                    <div class="panel-header">
+                        <span>Calendar: <span id="calendar-vehicle-name">Select a vehicle</span></span>
+                        <div>
+                            <span class="badge" id="calendar-online-status">--</span>
+                            <button class="btn primary" onclick="openNewJobModal()" style="margin-left: 0.5rem; padding: 0.25rem 0.5rem;">+ New Job</button>
+                        </div>
+                    </div>
+                    <div class="panel-body" id="calendar-jobs" style="padding: 1rem;">
+                        <p style="color: #666; text-align: center;">Select a vehicle to view its calendar</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Dispatch Tab -->
+    <div class="container tab-content" id="tab-dispatch" style="display: none;">
+        <div class="dispatch-layout">
+            <div class="panel" style="margin-bottom: 1rem;">
+                <div class="panel-header">Quick Actions</div>
+                <div class="panel-body" style="padding: 1rem;">
+                    <div class="form-group">
+                        <label>Target Vehicle</label>
+                        <input type="text" id="dispatch-vehicle" placeholder="VIN00000000000001">
+                    </div>
+                    <div class="quick-actions" id="quick-actions">
+                        <p style="color: #666;">Quick actions will appear here based on available services.</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="panels">
+                <div class="panel">
+                    <div class="panel-header">Custom Command</div>
+                    <div class="panel-body" style="padding: 1rem;">
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>Service</label>
+                                <select id="dispatch-service" onchange="loadDispatchMethods()">
+                                    <option value="">Select service...</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label>Method</label>
+                                <select id="dispatch-method" onchange="loadDispatchParams()">
+                                    <option value="">Select method...</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div id="dispatch-form"></div>
+                        <button class="btn primary" onclick="dispatchCommand()" style="margin-top: 1rem;">Execute</button>
+                        <div id="dispatch-result" style="margin-top: 1rem; display: none;"></div>
+                    </div>
+                </div>
+
+                <div class="panel">
+                    <div class="panel-header">Recent Commands</div>
+                    <div class="panel-body" id="recent-commands">
+                        <div class="loading">Loading...</div>
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -962,6 +1405,516 @@
         // Auto-refresh every 10 seconds
         setInterval(refreshAll, 10000);
         setInterval(checkMqttStatus, 5000);
+
+        // ===========================================
+        // Tab Navigation
+        // ===========================================
+        let currentTab = 'fleet';
+
+        function switchTab(tabName) {
+            currentTab = tabName;
+
+            // Update tab buttons
+            document.querySelectorAll('.tab-btn').forEach(btn => {
+                btn.classList.remove('active');
+                if (btn.textContent.toLowerCase() === tabName) {
+                    btn.classList.add('active');
+                }
+            });
+
+            // Update tab content
+            document.querySelectorAll('.tab-content').forEach(content => {
+                content.style.display = 'none';
+            });
+            document.getElementById('tab-' + tabName).style.display = 'block';
+
+            // Load data for the tab
+            if (tabName === 'services') {
+                loadSchemas();
+            } else if (tabName === 'calendar') {
+                loadCalendarVehicles();
+            } else if (tabName === 'dispatch') {
+                loadDispatchServices();
+            }
+        }
+
+        // ===========================================
+        // Service Explorer Functions
+        // ===========================================
+        let schemasData = [];
+        let selectedSchema = null;
+        let selectedMethod = null;
+
+        async function loadSchemas() {
+            try {
+                const data = await fetchJson('/api/schemas');
+                schemasData = data.schemas;
+
+                const container = document.getElementById('schema-list');
+
+                if (schemasData.length === 0) {
+                    container.innerHTML = '<div class="list-item" style="color: #666;">No schemas available.<br><small>Add schemas via POST /api/schemas</small></div>';
+                    return;
+                }
+
+                let html = '';
+                for (const schema of schemasData) {
+                    const methods = schema.methods || [];
+                    html += `
+                        <div class="service-item" onclick="toggleService('${schema.service_name}')">
+                            <div class="service-name">
+                                <span>${schema.service_name}</span>
+                                <span class="arrow">▶</span>
+                            </div>
+                            <div class="method-list">
+                                ${methods.map(m => `
+                                    <div class="method-item" onclick="event.stopPropagation(); selectMethod('${schema.service_name}', '${m.name}')">
+                                        <span>${m.name}</span>
+                                        ${m.is_schedulable ? '<span class="schedulable-dot" title="Schedulable"></span>' : ''}
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </div>
+                    `;
+                }
+                container.innerHTML = html;
+
+            } catch (err) {
+                console.error('Failed to load schemas:', err);
+                document.getElementById('schema-list').innerHTML =
+                    '<div class="list-item error">Failed to load schemas</div>';
+            }
+        }
+
+        function toggleService(serviceName) {
+            const items = document.querySelectorAll('.service-item');
+            items.forEach(item => {
+                const name = item.querySelector('.service-name span').textContent;
+                if (name === serviceName) {
+                    item.classList.toggle('expanded');
+                }
+            });
+        }
+
+        function selectMethod(serviceName, methodName) {
+            // Update selection
+            document.querySelectorAll('.method-item').forEach(el => el.classList.remove('selected'));
+            event.target.closest('.method-item').classList.add('selected');
+
+            // Find schema and method
+            selectedSchema = schemasData.find(s => s.service_name === serviceName);
+            selectedMethod = (selectedSchema.methods || []).find(m => m.name === methodName);
+
+            if (!selectedMethod) return;
+
+            // Show method panel
+            document.getElementById('no-method-panel').style.display = 'none';
+            document.getElementById('method-panel').style.display = 'block';
+
+            // Update header
+            document.getElementById('method-title').textContent = `${serviceName}.${methodName}`;
+            document.getElementById('method-description').textContent = selectedMethod.description || '';
+
+            const schedulableBadge = document.getElementById('method-schedulable');
+            if (selectedMethod.is_schedulable) {
+                schedulableBadge.style.display = 'inline';
+                document.getElementById('btn-schedule').style.display = 'inline';
+            } else {
+                schedulableBadge.style.display = 'none';
+                document.getElementById('btn-schedule').style.display = 'none';
+            }
+
+            // Build dynamic form
+            buildDynamicForm(selectedMethod.input_parameters || []);
+        }
+
+        function buildDynamicForm(parameters) {
+            const container = document.getElementById('dynamic-form');
+
+            if (parameters.length === 0) {
+                container.innerHTML = '<p style="color: #666; font-size: 0.875rem;">No parameters required</p>';
+                return;
+            }
+
+            let html = '';
+            for (const param of parameters) {
+                html += renderParameter(param, '');
+            }
+            container.innerHTML = html;
+        }
+
+        function renderParameter(param, prefix) {
+            const name = param.name;
+            const type = param.datatype || param.type || 'string';
+            const fieldId = prefix ? `${prefix}.${name}` : name;
+
+            // Check if it's an enum
+            const enumDef = selectedSchema.enum_definitions?.[type];
+            if (enumDef) {
+                const options = enumDef.options || [];
+                // Check if array (ends with [])
+                if (type.endsWith('[]') || param.datatype?.includes('[]')) {
+                    return `
+                        <div class="field-group">
+                            <label>${name} (${type})</label>
+                            <div class="checkbox-group">
+                                ${options.map(o => `
+                                    <label>
+                                        <input type="checkbox" name="${fieldId}" value="${o.name}">
+                                        ${o.name}
+                                    </label>
+                                `).join('')}
+                            </div>
+                        </div>
+                    `;
+                } else {
+                    return `
+                        <div class="field-group">
+                            <label>${name}</label>
+                            <select id="param-${fieldId}">
+                                ${options.map(o => `<option value="${o.name}">${o.name}</option>`).join('')}
+                            </select>
+                        </div>
+                    `;
+                }
+            }
+
+            // Check if it's a struct
+            const structDef = selectedSchema.struct_definitions?.[type];
+            if (structDef) {
+                const members = structDef.members || [];
+                return `
+                    <div class="field-group struct">
+                        <label>${name} (${type})</label>
+                        ${members.map(m => renderParameter(m, fieldId)).join('')}
+                    </div>
+                `;
+            }
+
+            // Basic types
+            const inputType = getInputType(type);
+            return `
+                <div class="field-group">
+                    <label>${name} (${type})</label>
+                    <input type="${inputType}" id="param-${fieldId}" ${inputType === 'number' ? 'step="any"' : ''}>
+                </div>
+            `;
+        }
+
+        function getInputType(type) {
+            if (['int32', 'uint32', 'int64', 'uint64', 'float', 'double', 'number'].includes(type)) {
+                return 'number';
+            }
+            if (type === 'boolean' || type === 'bool') {
+                return 'checkbox';
+            }
+            return 'text';
+        }
+
+        function getFormData() {
+            const data = {};
+            document.querySelectorAll('#dynamic-form input, #dynamic-form select').forEach(el => {
+                const id = el.id.replace('param-', '');
+                if (el.type === 'checkbox' && el.name) {
+                    // Multi-select checkbox
+                    if (!data[el.name]) data[el.name] = [];
+                    if (el.checked) data[el.name].push(el.value);
+                } else if (el.type === 'checkbox') {
+                    data[id] = el.checked;
+                } else if (el.type === 'number') {
+                    data[id] = el.value ? parseFloat(el.value) : null;
+                } else {
+                    data[id] = el.value;
+                }
+            });
+            return data;
+        }
+
+        function switchFormView(view) {
+            document.querySelectorAll('.form-tab-btn').forEach(btn => {
+                btn.classList.toggle('active', btn.textContent.toLowerCase() === view);
+            });
+
+            if (view === 'json') {
+                document.getElementById('dynamic-form').style.display = 'none';
+                document.getElementById('json-view').style.display = 'block';
+                // Sync form data to JSON
+                document.getElementById('service-params-json').value = JSON.stringify(getFormData(), null, 2);
+            } else {
+                document.getElementById('dynamic-form').style.display = 'block';
+                document.getElementById('json-view').style.display = 'none';
+            }
+        }
+
+        async function executeNow() {
+            const vehicleId = document.getElementById('service-vehicle').value;
+            if (!vehicleId) {
+                alert('Please enter a target vehicle ID');
+                return;
+            }
+
+            const params = document.getElementById('json-view').style.display === 'block'
+                ? JSON.parse(document.getElementById('service-params-json').value)
+                : getFormData();
+
+            const resultDiv = document.getElementById('service-result');
+            resultDiv.style.display = 'block';
+            resultDiv.innerHTML = '<div class="result-box">Executing...</div>';
+
+            try {
+                const response = await fetch('/api/rpc', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        vehicle_id: vehicleId,
+                        service_name: selectedSchema.service_name,
+                        method_name: selectedMethod.name,
+                        parameters: params,
+                        timeout_ms: 5000
+                    })
+                });
+
+                const data = await response.json();
+                if (response.ok) {
+                    resultDiv.innerHTML = `<div class="result-box success">Dispatched!\nCorrelation ID: ${data.correlation_id}</div>`;
+                } else {
+                    resultDiv.innerHTML = `<div class="result-box error">Error: ${data.error}</div>`;
+                }
+            } catch (err) {
+                resultDiv.innerHTML = `<div class="result-box error">Error: ${err.message}</div>`;
+            }
+        }
+
+        function openScheduleModal() {
+            // For now, use the existing schedule functionality
+            const vehicleId = document.getElementById('service-vehicle').value;
+            if (!vehicleId) {
+                alert('Please enter a target vehicle ID');
+                return;
+            }
+
+            // Pre-fill the schedule form
+            document.getElementById('schedule-vehicle').value = vehicleId;
+            document.getElementById('schedule-service').value = selectedSchema.service_name;
+            document.getElementById('schedule-method').value = selectedMethod.name;
+            document.getElementById('schedule-params').value = JSON.stringify(getFormData(), null, 2);
+
+            // Switch to fleet tab and scroll to schedule form
+            switchTab('fleet');
+            document.querySelector('.panels').scrollIntoView({ behavior: 'smooth' });
+        }
+
+        // ===========================================
+        // Calendar Functions
+        // ===========================================
+        let calendarVehicles = [];
+        let selectedCalendarVehicle = null;
+
+        async function loadCalendarVehicles() {
+            try {
+                const data = await fetchJson('/api/vehicles?per_page=100');
+                calendarVehicles = data.vehicles;
+
+                renderCalendarVehicleList(calendarVehicles);
+            } catch (err) {
+                console.error('Failed to load calendar vehicles:', err);
+            }
+        }
+
+        function renderCalendarVehicleList(vehicles) {
+            const container = document.getElementById('calendar-vehicle-list');
+            if (vehicles.length === 0) {
+                container.innerHTML = '<div class="list-item">No vehicles found</div>';
+                return;
+            }
+
+            container.innerHTML = vehicles.map(v => `
+                <div class="calendar-vehicle-item ${selectedCalendarVehicle === v.vehicle_id ? 'selected' : ''}"
+                     onclick="selectCalendarVehicle('${v.vehicle_id}')">
+                    <span>${v.vehicle_id}</span>
+                    <span class="online-dot" title="Status unknown"></span>
+                </div>
+            `).join('');
+        }
+
+        function searchCalendarVehicles() {
+            const search = document.getElementById('calendar-vehicle-search').value.toLowerCase();
+            const filtered = calendarVehicles.filter(v =>
+                v.vehicle_id.toLowerCase().includes(search)
+            );
+            renderCalendarVehicleList(filtered);
+        }
+
+        async function selectCalendarVehicle(vehicleId) {
+            selectedCalendarVehicle = vehicleId;
+
+            // Update selection UI
+            document.querySelectorAll('.calendar-vehicle-item').forEach(el => {
+                el.classList.toggle('selected', el.textContent.includes(vehicleId));
+            });
+
+            document.getElementById('calendar-vehicle-name').textContent = vehicleId;
+
+            // Load calendar data
+            try {
+                const data = await fetchJson(`/api/calendar/${vehicleId}`);
+
+                // Update online status
+                const statusBadge = document.getElementById('calendar-online-status');
+                if (data.vehicle_online) {
+                    statusBadge.textContent = 'Online';
+                    statusBadge.className = 'badge success';
+                } else {
+                    statusBadge.textContent = 'Offline';
+                    statusBadge.className = 'badge';
+                }
+
+                // Render jobs
+                renderCalendarJobs(data);
+
+            } catch (err) {
+                console.error('Failed to load calendar:', err);
+            }
+        }
+
+        function renderCalendarJobs(data) {
+            const container = document.getElementById('calendar-jobs');
+            const allJobs = [...(data.jobs || []), ...(data.pending || [])];
+
+            if (allJobs.length === 0) {
+                container.innerHTML = '<p style="color: #666; text-align: center;">No scheduled jobs</p>';
+                return;
+            }
+
+            container.innerHTML = allJobs.map(job => `
+                <div class="job-card ${job.source === 'offboard' ? 'pending' : ''}">
+                    <div class="job-title">${job.title || job.job_id}</div>
+                    <div class="job-meta">
+                        <div>${job.service_name}.${job.method_name}</div>
+                        <div>Scheduled: ${job.scheduled_time || 'Not set'}</div>
+                        ${job.recurrence_rule ? `<div>Recurrence: ${job.recurrence_rule}</div>` : ''}
+                        ${job.wake_policy === 1 ? '<div>Wake: Required (lead: ' + job.wake_lead_time_s + 's)</div>' : ''}
+                        <div>Status: ${job.status} ${job.sync_status ? '(' + job.sync_status + ')' : ''}</div>
+                    </div>
+                    <div class="job-actions">
+                        <button class="btn" onclick="deleteJob('${data.vehicle_id}', '${job.job_id}')" style="padding: 0.25rem 0.5rem; font-size: 0.75rem;">Delete</button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        async function deleteJob(vehicleId, jobId) {
+            if (!confirm('Delete this job?')) return;
+
+            try {
+                const response = await fetch(`/api/calendar/${vehicleId}/${jobId}`, { method: 'DELETE' });
+                const data = await response.json();
+
+                if (response.ok) {
+                    selectCalendarVehicle(vehicleId); // Reload
+                } else {
+                    alert('Error: ' + data.error);
+                }
+            } catch (err) {
+                alert('Error: ' + err.message);
+            }
+        }
+
+        function openNewJobModal() {
+            if (!selectedCalendarVehicle) {
+                alert('Please select a vehicle first');
+                return;
+            }
+
+            // Pre-fill and switch to services tab
+            document.getElementById('service-vehicle').value = selectedCalendarVehicle;
+            switchTab('services');
+        }
+
+        // ===========================================
+        // Dispatch Functions
+        // ===========================================
+
+        async function loadDispatchServices() {
+            try {
+                const data = await fetchJson('/api/schemas');
+                const select = document.getElementById('dispatch-service');
+                select.innerHTML = '<option value="">Select service...</option>' +
+                    data.schemas.map(s => `<option value="${s.service_name}">${s.service_name}</option>`).join('');
+
+            } catch (err) {
+                console.error('Failed to load dispatch services:', err);
+            }
+        }
+
+        function loadDispatchMethods() {
+            const serviceName = document.getElementById('dispatch-service').value;
+            const select = document.getElementById('dispatch-method');
+
+            if (!serviceName) {
+                select.innerHTML = '<option value="">Select method...</option>';
+                return;
+            }
+
+            const schema = schemasData.find(s => s.service_name === serviceName);
+            if (!schema) return;
+
+            const methods = schema.methods || [];
+            select.innerHTML = '<option value="">Select method...</option>' +
+                methods.map(m => `<option value="${m.name}">${m.name}</option>`).join('');
+        }
+
+        function loadDispatchParams() {
+            // Could build a dynamic form here too
+            document.getElementById('dispatch-form').innerHTML =
+                '<div class="form-group"><label>Parameters (JSON)</label><textarea id="dispatch-params-json" rows="3">{}</textarea></div>';
+        }
+
+        async function dispatchCommand() {
+            const vehicleId = document.getElementById('dispatch-vehicle').value;
+            const serviceName = document.getElementById('dispatch-service').value;
+            const methodName = document.getElementById('dispatch-method').value;
+            const paramsText = document.getElementById('dispatch-params-json')?.value || '{}';
+
+            if (!vehicleId || !serviceName || !methodName) {
+                alert('Please fill in all fields');
+                return;
+            }
+
+            const resultDiv = document.getElementById('dispatch-result');
+            resultDiv.style.display = 'block';
+            resultDiv.innerHTML = '<div class="result-box">Dispatching...</div>';
+
+            try {
+                const response = await fetch('/api/rpc', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        vehicle_id: vehicleId,
+                        service_name: serviceName,
+                        method_name: methodName,
+                        parameters: JSON.parse(paramsText),
+                        timeout_ms: 5000
+                    })
+                });
+
+                const data = await response.json();
+                if (response.ok) {
+                    resultDiv.innerHTML = `<div class="result-box success">Dispatched!\nCorrelation ID: ${data.correlation_id}</div>`;
+                    loadRecentCommands();
+                } else {
+                    resultDiv.innerHTML = `<div class="result-box error">Error: ${data.error}</div>`;
+                }
+            } catch (err) {
+                resultDiv.innerHTML = `<div class="result-box error">Error: ${err.message}</div>`;
+            }
+        }
+
+        async function loadRecentCommands() {
+            // This would need a /api/rpc/recent endpoint
+            document.getElementById('recent-commands').innerHTML =
+                '<div class="list-item" style="color: #666;">Recent commands will appear here</div>';
+        }
     </script>
 </body>
 </html>

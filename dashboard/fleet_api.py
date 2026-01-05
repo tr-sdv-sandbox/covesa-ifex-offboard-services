@@ -659,6 +659,414 @@ def health_check():
     return jsonify(status)
 
 
+# =============================================================================
+# Service Schemas API - For dynamic form generation
+# =============================================================================
+
+@app.route('/api/schemas')
+def get_schemas():
+    """Get all service schemas for UI form generation"""
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+    cur.execute("""
+        SELECT service_name, version, methods, struct_definitions, enum_definitions,
+               source, updated_at
+        FROM service_schemas
+        ORDER BY service_name
+    """)
+    schemas = cur.fetchall()
+
+    cur.close()
+    conn.close()
+
+    return jsonify({'schemas': schemas})
+
+
+@app.route('/api/schemas/<service_name>')
+def get_schema(service_name):
+    """Get specific service schema with full details"""
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+    version = request.args.get('version')
+
+    if version:
+        cur.execute("""
+            SELECT * FROM service_schemas
+            WHERE service_name = %s AND version = %s
+        """, (service_name, version))
+    else:
+        # Get latest version
+        cur.execute("""
+            SELECT * FROM service_schemas
+            WHERE service_name = %s
+            ORDER BY updated_at DESC
+            LIMIT 1
+        """, (service_name,))
+
+    schema = cur.fetchone()
+
+    cur.close()
+    conn.close()
+
+    if not schema:
+        return jsonify({'error': 'Schema not found'}), 404
+
+    return jsonify(schema)
+
+
+@app.route('/api/schemas', methods=['POST'])
+def upsert_schema():
+    """Create or update a service schema"""
+    data = request.get_json()
+    if not data:
+        return jsonify({'error': 'JSON body required'}), 400
+
+    required = ['service_name', 'schema_json']
+    for field in required:
+        if field not in data:
+            return jsonify({'error': f'Missing required field: {field}'}), 400
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+
+    try:
+        # Extract methods, structs, enums from schema_json
+        schema_json = data['schema_json']
+        methods = []
+        struct_defs = {}
+        enum_defs = {}
+
+        # Parse namespaces to extract methods
+        for ns in schema_json.get('namespaces', []):
+            for method in ns.get('methods', []):
+                methods.append({
+                    'namespace': ns.get('name'),
+                    'name': method.get('name'),
+                    'description': method.get('description'),
+                    'input_parameters': method.get('input', []),
+                    'output_parameters': method.get('output', []),
+                    'is_schedulable': method.get('x_scheduling', {}).get('enabled', False)
+                })
+
+            # Extract struct definitions
+            for struct in ns.get('structs', []):
+                struct_defs[struct['name']] = {
+                    'members': struct.get('members', []),
+                    'description': struct.get('description')
+                }
+
+            # Extract enum definitions
+            for enum in ns.get('enumerations', []):
+                enum_defs[enum['name']] = {
+                    'options': [{'name': o['name'], 'value': o.get('value', i)}
+                               for i, o in enumerate(enum.get('options', []))],
+                    'description': enum.get('description')
+                }
+
+        cur.execute("""
+            INSERT INTO service_schemas
+            (service_name, version, schema_json, methods, struct_definitions, enum_definitions, source)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (service_name, version) DO UPDATE SET
+                schema_json = EXCLUDED.schema_json,
+                methods = EXCLUDED.methods,
+                struct_definitions = EXCLUDED.struct_definitions,
+                enum_definitions = EXCLUDED.enum_definitions,
+                updated_at = NOW()
+            RETURNING id
+        """, (
+            data['service_name'],
+            data.get('version', '1.0.0'),
+            json.dumps(schema_json),
+            json.dumps(methods),
+            json.dumps(struct_defs),
+            json.dumps(enum_defs),
+            data.get('source', 'manual')
+        ))
+
+        result = cur.fetchone()
+        conn.commit()
+
+        return jsonify({
+            'id': result[0],
+            'service_name': data['service_name'],
+            'status': 'created'
+        })
+
+    except Exception as e:
+        conn.rollback()
+        return jsonify({'error': str(e)}), 500
+    finally:
+        cur.close()
+        conn.close()
+
+
+# =============================================================================
+# Calendar API - Cloud-side job scheduling with offline support
+# =============================================================================
+
+@app.route('/api/calendar/<vehicle_id>')
+def get_calendar(vehicle_id):
+    """Get calendar events for a vehicle (synced jobs + pending offboard jobs)"""
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+    # Check if vehicle exists and get online status
+    cur.execute("""
+        SELECT vehicle_id, is_online, last_seen_at FROM vehicles WHERE vehicle_id = %s
+    """, (vehicle_id,))
+    vehicle = cur.fetchone()
+
+    if not vehicle:
+        cur.close()
+        conn.close()
+        return jsonify({'error': 'Vehicle not found'}), 404
+
+    # Get synced jobs from vehicle
+    cur.execute("""
+        SELECT job_id, title, service_name, method_name, parameters,
+               scheduled_time, recurrence_rule, next_run_time, status,
+               wake_policy, sleep_policy, wake_lead_time_s,
+               'synced' as source, sync_updated_at as updated_at
+        FROM jobs
+        WHERE vehicle_id = %s
+        ORDER BY scheduled_time
+    """, (vehicle_id,))
+    synced_jobs = cur.fetchall()
+
+    # Get pending offboard calendar entries
+    cur.execute("""
+        SELECT job_id, title, service_name, method_name, parameters,
+               scheduled_time::text, recurrence_rule, NULL as next_run_time,
+               'pending' as status,
+               wake_policy, sleep_policy, wake_lead_time_s,
+               'offboard' as source, created_at as updated_at,
+               sync_status, sync_error
+        FROM offboard_calendar
+        WHERE vehicle_id = %s AND sync_status != 'synced'
+        ORDER BY scheduled_time
+    """, (vehicle_id,))
+    pending_jobs = cur.fetchall()
+
+    cur.close()
+    conn.close()
+
+    return jsonify({
+        'vehicle_id': vehicle_id,
+        'vehicle_online': vehicle['is_online'],
+        'last_seen': vehicle['last_seen_at'].isoformat() if vehicle['last_seen_at'] else None,
+        'jobs': synced_jobs,
+        'pending': pending_jobs
+    })
+
+
+@app.route('/api/calendar/<vehicle_id>', methods=['POST'])
+def create_calendar_entry(vehicle_id):
+    """
+    Create a calendar entry for a vehicle
+
+    If vehicle is online: sends scheduler command immediately
+    If vehicle is offline: stores in offboard_calendar for later sync
+
+    Request body:
+    {
+        "title": "Morning preheat",
+        "service_name": "climate_comfort_service",
+        "method_name": "set_comfort_level",
+        "parameters": {"level": "COZY"},
+        "scheduled_time": "2026-01-06T07:00:00Z",
+        "recurrence_rule": "FREQ=DAILY;BYDAY=MO,TU,WE,TH,FR",
+        "wake_policy": 1,
+        "sleep_policy": 0,
+        "wake_lead_time_s": 300
+    }
+    """
+    global mqtt_client, mqtt_connected
+
+    data = request.get_json()
+    if not data:
+        return jsonify({'error': 'JSON body required'}), 400
+
+    required = ['service_name', 'method_name']
+    for field in required:
+        if field not in data:
+            return jsonify({'error': f'Missing required field: {field}'}), 400
+
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+    # Check if vehicle exists and get online status
+    cur.execute("""
+        SELECT vehicle_id, is_online FROM vehicles WHERE vehicle_id = %s
+    """, (vehicle_id,))
+    vehicle = cur.fetchone()
+
+    if not vehicle:
+        # Auto-create vehicle record
+        cur.execute("""
+            INSERT INTO vehicles (vehicle_id) VALUES (%s)
+            ON CONFLICT DO NOTHING
+        """, (vehicle_id,))
+        conn.commit()
+        vehicle = {'vehicle_id': vehicle_id, 'is_online': False}
+
+    job_id = data.get('job_id', str(uuid.uuid4()))
+    scheduled_time = data.get('scheduled_time')
+
+    # Store in offboard_calendar
+    try:
+        cur.execute("""
+            INSERT INTO offboard_calendar
+            (vehicle_id, job_id, title, service_name, method_name, parameters,
+             scheduled_time, recurrence_rule, end_time,
+             wake_policy, sleep_policy, wake_lead_time_s,
+             sync_status, created_by)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING id
+        """, (
+            vehicle_id,
+            job_id,
+            data.get('title', f"{data['service_name']}.{data['method_name']}"),
+            data['service_name'],
+            data['method_name'],
+            json.dumps(data.get('parameters', {})),
+            scheduled_time,
+            data.get('recurrence_rule'),
+            data.get('end_time'),
+            data.get('wake_policy', 0),
+            data.get('sleep_policy', 0),
+            data.get('wake_lead_time_s', 0),
+            'pending',
+            data.get('created_by', 'api')
+        ))
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        cur.close()
+        conn.close()
+        return jsonify({'error': f'Database error: {str(e)}'}), 500
+
+    sync_status = 'pending'
+    sync_error = None
+
+    # If vehicle is online and MQTT connected, send immediately
+    if vehicle['is_online'] and mqtt_connected:
+        scheduler_cmd = {
+            'command_id': str(uuid.uuid4()),
+            'timestamp_ns': int(time.time() * 1e9),
+            'requester_id': 'fleet_dashboard',
+            'type': 1,  # COMMAND_CREATE_JOB
+            'create_job': {
+                'job_id': job_id,
+                'title': data.get('title', f"{data['service_name']}.{data['method_name']}"),
+                'service': data['service_name'],
+                'method': data['method_name'],
+                'parameters_json': json.dumps(data.get('parameters', {})),
+                'scheduled_time': scheduled_time or '',
+                'recurrence_rule': data.get('recurrence_rule', ''),
+                'end_time': data.get('end_time', ''),
+                'wake_policy': data.get('wake_policy', 0),
+                'sleep_policy': data.get('sleep_policy', 0),
+                'wake_lead_time_s': data.get('wake_lead_time_s', 0)
+            }
+        }
+
+        topic = f"c2v/{vehicle_id}/202"
+        try:
+            result = mqtt_client.publish(topic, json.dumps(scheduler_cmd), qos=1)
+            result.wait_for_publish(timeout=2.0)
+            sync_status = 'synced'
+
+            # Update offboard_calendar sync status
+            cur.execute("""
+                UPDATE offboard_calendar
+                SET sync_status = 'synced', synced_at = NOW()
+                WHERE job_id = %s
+            """, (job_id,))
+            conn.commit()
+
+        except Exception as e:
+            sync_error = str(e)
+            sync_status = 'pending'
+
+    cur.close()
+    conn.close()
+
+    return jsonify({
+        'job_id': job_id,
+        'vehicle_id': vehicle_id,
+        'vehicle_online': vehicle['is_online'],
+        'sync_status': sync_status,
+        'sync_error': sync_error,
+        'scheduled_time': scheduled_time
+    })
+
+
+@app.route('/api/calendar/<vehicle_id>/<job_id>', methods=['DELETE'])
+def delete_calendar_entry(vehicle_id, job_id):
+    """Delete a calendar entry"""
+    global mqtt_client, mqtt_connected
+
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+    # Check if it's in offboard_calendar (not yet synced)
+    cur.execute("""
+        SELECT id, sync_status FROM offboard_calendar
+        WHERE vehicle_id = %s AND job_id = %s
+    """, (vehicle_id, job_id))
+    offboard_entry = cur.fetchone()
+
+    if offboard_entry and offboard_entry['sync_status'] == 'pending':
+        # Just delete from offboard_calendar
+        cur.execute("""
+            DELETE FROM offboard_calendar WHERE job_id = %s
+        """, (job_id,))
+        conn.commit()
+        cur.close()
+        conn.close()
+        return jsonify({'job_id': job_id, 'status': 'deleted', 'source': 'offboard'})
+
+    # Check vehicle online status
+    cur.execute("""
+        SELECT is_online FROM vehicles WHERE vehicle_id = %s
+    """, (vehicle_id,))
+    vehicle = cur.fetchone()
+
+    cur.close()
+    conn.close()
+
+    if not vehicle:
+        return jsonify({'error': 'Vehicle not found'}), 404
+
+    # Send delete command to vehicle
+    if mqtt_connected:
+        scheduler_cmd = {
+            'command_id': str(uuid.uuid4()),
+            'timestamp_ns': int(time.time() * 1e9),
+            'requester_id': 'fleet_dashboard',
+            'type': 3,  # COMMAND_DELETE_JOB
+            'delete_job_id': job_id
+        }
+
+        topic = f"c2v/{vehicle_id}/202"
+        try:
+            result = mqtt_client.publish(topic, json.dumps(scheduler_cmd), qos=1)
+            result.wait_for_publish(timeout=2.0)
+            return jsonify({
+                'job_id': job_id,
+                'vehicle_id': vehicle_id,
+                'status': 'delete_sent',
+                'vehicle_online': vehicle['is_online']
+            })
+        except Exception as e:
+            return jsonify({'error': f'MQTT publish failed: {str(e)}'}), 500
+
+    return jsonify({'error': 'MQTT not connected'}), 503
+
+
 if __name__ == '__main__':
     port = int(os.getenv('DASHBOARD_PORT', 5000))
     print(f"Starting IFEX Fleet Dashboard API on port {port}")
