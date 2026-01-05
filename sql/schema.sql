@@ -58,6 +58,9 @@ CREATE TABLE jobs (
     recurrence_rule VARCHAR(128),
     next_run_time VARCHAR(64),
     status VARCHAR(32) DEFAULT 'pending',
+    wake_policy SMALLINT DEFAULT 0,      -- 0=NO_WAKE, 1=WAKE_REQUIRED
+    sleep_policy SMALLINT DEFAULT 0,     -- 0=SLEEP_NORMAL, 1=INHIBIT_UNTIL_COMPLETE
+    wake_lead_time_s INTEGER DEFAULT 0,  -- seconds before scheduled_time to wake
     created_at_ms BIGINT,
     updated_at_ms BIGINT,
     sync_created_at TIMESTAMPTZ DEFAULT NOW(),

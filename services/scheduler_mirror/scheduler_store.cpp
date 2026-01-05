@@ -122,8 +122,9 @@ void SchedulerStore::handle_job_created(
         INSERT INTO jobs (
             vehicle_id, job_id, title, service_name, method_name,
             parameters, scheduled_time, recurrence_rule, next_run_time,
-            status, created_at_ms, updated_at_ms
-        ) VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11, $12)
+            status, wake_policy, sleep_policy, wake_lead_time_s,
+            created_at_ms, updated_at_ms
+        ) VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11, $12, $13, $14, $15)
         ON CONFLICT (vehicle_id, job_id)
         DO UPDATE SET
             title = EXCLUDED.title,
@@ -134,6 +135,9 @@ void SchedulerStore::handle_job_created(
             recurrence_rule = EXCLUDED.recurrence_rule,
             next_run_time = EXCLUDED.next_run_time,
             status = EXCLUDED.status,
+            wake_policy = EXCLUDED.wake_policy,
+            sleep_policy = EXCLUDED.sleep_policy,
+            wake_lead_time_s = EXCLUDED.wake_lead_time_s,
             created_at_ms = EXCLUDED.created_at_ms,
             updated_at_ms = EXCLUDED.updated_at_ms,
             sync_updated_at = NOW()
@@ -149,6 +153,9 @@ void SchedulerStore::handle_job_created(
             info.recurrence_rule(),
             info.next_run_time(),
             job_status_to_string(info.status()),
+            std::to_string(static_cast<int>(info.wake_policy())),
+            std::to_string(static_cast<int>(info.sleep_policy())),
+            std::to_string(info.wake_lead_time_s()),
             std::to_string(info.created_at_ms()),
             std::to_string(info.updated_at_ms())
         });
@@ -171,7 +178,10 @@ void SchedulerStore::handle_job_updated(
             recurrence_rule = $8,
             next_run_time = $9,
             status = $10,
-            updated_at_ms = $11,
+            wake_policy = $11,
+            sleep_policy = $12,
+            wake_lead_time_s = $13,
+            updated_at_ms = $14,
             sync_updated_at = NOW()
         WHERE vehicle_id = $1 AND job_id = $2
         )",
@@ -186,6 +196,9 @@ void SchedulerStore::handle_job_updated(
             info.recurrence_rule(),
             info.next_run_time(),
             job_status_to_string(info.status()),
+            std::to_string(static_cast<int>(info.wake_policy())),
+            std::to_string(static_cast<int>(info.sleep_policy())),
+            std::to_string(info.wake_lead_time_s()),
             std::to_string(info.updated_at_ms())
         });
 }

@@ -20,6 +20,18 @@ enum command_type_t {
   COMMAND_TRIGGER_JOB = 6;
 }
 
+// Vehicle wake behavior for scheduled jobs
+enum wake_policy_t {
+  NO_WAKE = 0;
+  WAKE_REQUIRED = 1;
+}
+
+// Vehicle sleep behavior during job execution
+enum sleep_policy_t {
+  SLEEP_NORMAL = 0;
+  INHIBIT_UNTIL_COMPLETE = 1;
+}
+
 // Job definition for create operations
 message job_definition_t {
   string job_id = 1;
@@ -31,6 +43,9 @@ message job_definition_t {
   string recurrence_rule = 7;
   string end_time = 8;
   string service_address = 9;
+  wake_policy_t wake_policy = 10;
+  sleep_policy_t sleep_policy = 11;
+  uint32 wake_lead_time_s = 12;
 }
 
 // Partial job update - only specified fields are updated
@@ -41,6 +56,9 @@ message job_update_t {
   string recurrence_rule = 4;
   string parameters_json = 5;
   string end_time = 6;
+  wake_policy_t wake_policy = 7;
+  sleep_policy_t sleep_policy = 8;
+  uint32 wake_lead_time_s = 9;
 }
 
 // Scheduler command envelope (sent from cloud to vehicle)
