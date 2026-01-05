@@ -159,9 +159,13 @@ else()
     target_link_libraries(grpc_service_base PUBLIC ${GRPC_REFLECTION})
 endif()
 
+# =============================================================================
+# Ingestion Services (Vehicle → Cloud)
+# =============================================================================
+
 # MQTT-Kafka Bridge service
 add_executable(mqtt_kafka_bridge
-    services/mqtt_kafka_bridge/main.cpp
+    services/ingestion/mqtt_kafka_bridge/main.cpp
 )
 target_include_directories(mqtt_kafka_bridge PRIVATE
     libs/postgres_client/include
@@ -176,11 +180,11 @@ target_link_libraries(mqtt_kafka_bridge PRIVATE
 
 # Discovery Mirror service
 add_executable(discovery_mirror
-    services/discovery_mirror/main.cpp
-    services/discovery_mirror/discovery_store.cpp
+    services/ingestion/discovery_mirror/main.cpp
+    services/ingestion/discovery_mirror/discovery_store.cpp
 )
 target_include_directories(discovery_mirror PRIVATE
-    services/discovery_mirror
+    services/ingestion/discovery_mirror
 )
 target_link_libraries(discovery_mirror PRIVATE
     kafka_client
@@ -192,11 +196,11 @@ target_link_libraries(discovery_mirror PRIVATE
 
 # Scheduler Mirror service
 add_executable(scheduler_mirror
-    services/scheduler_mirror/main.cpp
-    services/scheduler_mirror/scheduler_store.cpp
+    services/ingestion/scheduler_mirror/main.cpp
+    services/ingestion/scheduler_mirror/scheduler_store.cpp
 )
 target_include_directories(scheduler_mirror PRIVATE
-    services/scheduler_mirror
+    services/ingestion/scheduler_mirror
 )
 target_link_libraries(scheduler_mirror PRIVATE
     kafka_client
@@ -208,11 +212,11 @@ target_link_libraries(scheduler_mirror PRIVATE
 
 # RPC Gateway service
 add_executable(rpc_gateway
-    services/rpc_gateway/main.cpp
-    services/rpc_gateway/rpc_store.cpp
+    services/ingestion/rpc_gateway/main.cpp
+    services/ingestion/rpc_gateway/rpc_store.cpp
 )
 target_include_directories(rpc_gateway PRIVATE
-    services/rpc_gateway
+    services/ingestion/rpc_gateway
 )
 target_link_libraries(rpc_gateway PRIVATE
     kafka_client
@@ -222,30 +226,22 @@ target_link_libraries(rpc_gateway PRIVATE
     gflags
 )
 
-# Enrichment Exporter service
-add_executable(enrichment_exporter
-    services/enrichment_exporter/main.cpp
-)
-target_link_libraries(enrichment_exporter PRIVATE
-    kafka_client
-    postgres_client
-    ifex_offboard_proto
-    glog::glog
-    gflags
-)
+# =============================================================================
+# API Services (Cloud gRPC APIs)
+# =============================================================================
 
-# Cloud Discovery Service
-add_executable(cloud_discovery
-    services/cloud_discovery/main.cpp
-    services/cloud_discovery/discovery_service_impl.cpp
-    services/cloud_discovery/discovery_query.cpp
+# Discovery API Service
+add_executable(discovery_api
+    services/api/discovery/main.cpp
+    services/api/discovery/discovery_service_impl.cpp
+    services/api/discovery/discovery_query.cpp
 )
-target_include_directories(cloud_discovery PRIVATE
-    services/cloud_discovery
+target_include_directories(discovery_api PRIVATE
+    services/api/discovery
     libs/postgres_client/include
     libs/grpc_service_base/include
 )
-target_link_libraries(cloud_discovery PRIVATE
+target_link_libraries(discovery_api PRIVATE
     grpc_service_base
     postgres_client
     ifex_offboard_proto
@@ -253,22 +249,22 @@ target_link_libraries(cloud_discovery PRIVATE
     gflags
 )
 
-# Cloud Dispatcher Service
-add_executable(cloud_dispatcher
-    services/cloud_dispatcher/main.cpp
-    services/cloud_dispatcher/dispatcher_service_impl.cpp
-    services/cloud_dispatcher/rpc_request_manager.cpp
-    services/cloud_dispatcher/request_producer.cpp
-    services/cloud_dispatcher/response_consumer.cpp
+# Dispatcher API Service
+add_executable(dispatcher_api
+    services/api/dispatcher/main.cpp
+    services/api/dispatcher/dispatcher_service_impl.cpp
+    services/api/dispatcher/rpc_request_manager.cpp
+    services/api/dispatcher/request_producer.cpp
+    services/api/dispatcher/response_consumer.cpp
 )
-target_include_directories(cloud_dispatcher PRIVATE
-    services/cloud_dispatcher
+target_include_directories(dispatcher_api PRIVATE
+    services/api/dispatcher
     libs/postgres_client/include
     libs/grpc_service_base/include
     libs/envelope_codec/include
     ${RDKAFKA_INCLUDE_DIRS}
 )
-target_link_libraries(cloud_dispatcher PRIVATE
+target_link_libraries(dispatcher_api PRIVATE
     grpc_service_base
     postgres_client
     envelope_codec
@@ -278,24 +274,40 @@ target_link_libraries(cloud_dispatcher PRIVATE
     gflags
 )
 
-# Cloud Scheduler Service
-add_executable(cloud_scheduler
-    services/cloud_scheduler/main.cpp
-    services/cloud_scheduler/scheduler_service_impl.cpp
-    services/cloud_scheduler/scheduler_query.cpp
-    services/cloud_scheduler/job_command_producer.cpp
+# Scheduler API Service
+add_executable(scheduler_api
+    services/api/scheduler/main.cpp
+    services/api/scheduler/scheduler_service_impl.cpp
+    services/api/scheduler/scheduler_query.cpp
+    services/api/scheduler/job_command_producer.cpp
 )
-target_include_directories(cloud_scheduler PRIVATE
-    services/cloud_scheduler
+target_include_directories(scheduler_api PRIVATE
+    services/api/scheduler
     libs/postgres_client/include
     libs/grpc_service_base/include
     ${RDKAFKA_INCLUDE_DIRS}
 )
-target_link_libraries(cloud_scheduler PRIVATE
+target_link_libraries(scheduler_api PRIVATE
     grpc_service_base
     postgres_client
     ifex_offboard_proto
     ${RDKAFKA_LIBRARIES}
+    glog::glog
+    gflags
+)
+
+# =============================================================================
+# Exporter Services (DB → Kafka)
+# =============================================================================
+
+# Enrichment Exporter service
+add_executable(enrichment_exporter
+    services/exporters/enrichment/main.cpp
+)
+target_link_libraries(enrichment_exporter PRIVATE
+    kafka_client
+    postgres_client
+    ifex_offboard_proto
     glog::glog
     gflags
 )
@@ -309,13 +321,16 @@ endif()
 
 # Install targets
 install(TARGETS
+    # Ingestion
     mqtt_kafka_bridge
     discovery_mirror
     scheduler_mirror
     rpc_gateway
+    # API
+    discovery_api
+    dispatcher_api
+    scheduler_api
+    # Exporters
     enrichment_exporter
-    cloud_discovery
-    cloud_dispatcher
-    cloud_scheduler
     RUNTIME DESTINATION bin
 )
