@@ -251,8 +251,8 @@ Tracks vehicle connection status using MQTT Last Will and Testament (LWT) and he
 
 | Step | File | Function/Code |
 |------|------|---------------|
-| 1. Set LWT | `mqtt_client.cpp:87` | `mosquitto_will_set(topic, "0", QoS=1, retain=true)` |
-| 2. Publish online | `mqtt_client.cpp:292` | `mosquitto_publish(topic, "1", QoS=1, retain=true)` |
+| 1. Set LWT | `mqtt_client.cpp:82-83` | `mosquitto_will_set(topic, "0", QoS=1, retain=true)` |
+| 2. Publish online | `mqtt_client.cpp:291-292` | `mosquitto_publish(topic, "1", QoS=1, retain=true)` |
 | 3. Receive MQTT | `mqtt_kafka_router.cpp:218` | `message_arrived()` → `on_message()` |
 | 4. Detect suffix | `mqtt_kafka_router.cpp:383-386` | `topic.ends_with("/is_online")` |
 | 5. Extract vehicle | `mqtt_kafka_router.cpp:389-391` | Parse `v2c/{vehicle_id}/is_online` |
@@ -265,12 +265,12 @@ Tracks vehicle connection status using MQTT Last Will and Testament (LWT) and he
 A background thread marks vehicles offline if no messages received:
 
 ```cpp
-// main.cpp:347-365
+// main.cpp:347-372
 while (g_running) {
+    std::string timeout_interval = std::to_string(FLAGS_heartbeat_timeout_s) + " seconds";
     db->execute(
         "UPDATE vehicles SET is_online = false "
-        "WHERE is_online = true AND last_seen_at < NOW() - INTERVAL '$1 seconds'",
-        {FLAGS_heartbeat_timeout_s});
+        "WHERE is_online = true AND last_seen_at < NOW() - INTERVAL '" + timeout_interval + "'");
     sleep(FLAGS_heartbeat_check_interval_s);
 }
 ```
@@ -294,3 +294,64 @@ cd ../build && ./tests/status_e2e_test
 # Query database
 ./deploy/query-db.sh "SELECT vehicle_id, is_online, last_seen_at FROM vehicles WHERE is_online = true LIMIT 10"
 ```
+
+## Discovery Sync Protocol
+
+Vehicles sync their service registry to cloud using a hash-based protocol (content_id=201).
+
+```
+VEHICLE                                         CLOUD
+   │                                              │
+   ├──── [hash1, hash2, hash3] ───────────────────▶  (just hashes)
+   │                                              │
+   │                               Unknown: hash3─┤
+   │                                              │
+   ◀──── [hash3] ──────────────────────────────────┤  (request)
+   │                                              │
+   ├──── {hash3: "yaml..."} ──────────────────────▶  (schema)
+   │                                              │
+```
+
+**Bandwidth savings**: 100K vehicles × 5 services → ~10MB vs 5GB (old protocol)
+
+### Database Schema (Normalized)
+
+```sql
+-- Unique schemas (deduplicated by hash)
+service_schemas (
+    schema_hash VARCHAR(64) PRIMARY KEY,
+    ifex_schema TEXT,
+    service_name, version,
+    methods JSONB,              -- Pre-parsed
+    struct_definitions JSONB,   -- Pre-parsed
+    enum_definitions JSONB      -- Pre-parsed
+)
+
+-- Vehicle ↔ Schema links
+vehicle_services (
+    vehicle_id,
+    schema_hash REFERENCES service_schemas
+)
+```
+
+See `docs/fleet-dashboard-spec.md` for full implementation details.
+
+## Fleet Dashboard
+
+Web UI for fleet management at `http://localhost:8000`.
+
+**Tabs:**
+- **Fleet** - Vehicle list with online/offline status
+- **Services** - Browse services discovered from vehicles
+- **Calendar** - View/create scheduled jobs
+- **Dispatch** - Execute RPC calls to vehicles
+
+**Architecture:**
+```
+Browser → fleet_api.py → PostgreSQL
+                      → MQTT (for RPC dispatch)
+```
+
+The dashboard uses pre-parsed JSONB from `service_schemas` to render dynamic forms based on IFEX method signatures.
+
+See `docs/fleet-dashboard-spec.md` for UI specification.
