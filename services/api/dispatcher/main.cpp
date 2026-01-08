@@ -2,7 +2,6 @@
 #include <glog/logging.h>
 
 #include "grpc_service_base.hpp"
-#include "postgres_client.hpp"
 #include "dispatcher_service_impl.hpp"
 #include "rpc_request_manager.hpp"
 #include "request_producer.hpp"
@@ -18,13 +17,6 @@ DEFINE_string(kafka_topic_c2v, "ifex.c2v.rpc", "Kafka topic for c2v RPC requests
 DEFINE_string(kafka_topic_v2c, "ifex.rpc.200", "Kafka topic for v2c RPC responses");
 DEFINE_string(kafka_group, "cloud-dispatcher", "Kafka consumer group ID");
 
-// PostgreSQL flags
-DEFINE_string(postgres_host, "localhost", "PostgreSQL host");
-DEFINE_int32(postgres_port, 5432, "PostgreSQL port");
-DEFINE_string(postgres_db, "ifex_offboard", "PostgreSQL database");
-DEFINE_string(postgres_user, "ifex", "PostgreSQL user");
-DEFINE_string(postgres_password, "ifex_dev", "PostgreSQL password");
-
 // RPC defaults
 DEFINE_int32(default_timeout_ms, 30000, "Default RPC timeout in milliseconds");
 
@@ -36,27 +28,11 @@ int main(int argc, char* argv[]) {
     LOG(INFO) << "Cloud Dispatcher Service starting...";
     LOG(INFO) << "  gRPC listen: " << FLAGS_grpc_listen;
     LOG(INFO) << "  Kafka: " << FLAGS_kafka_broker;
-    LOG(INFO) << "  PostgreSQL: " << FLAGS_postgres_host << ":" << FLAGS_postgres_port
-              << "/" << FLAGS_postgres_db;
+    LOG(INFO) << "  c2v topic: " << FLAGS_kafka_topic_c2v;
+    LOG(INFO) << "  v2c topic: " << FLAGS_kafka_topic_v2c;
 
-    // Create PostgreSQL client
-    ifex::offboard::PostgresConfig pg_config;
-    pg_config.host = FLAGS_postgres_host;
-    pg_config.port = FLAGS_postgres_port;
-    pg_config.database = FLAGS_postgres_db;
-    pg_config.user = FLAGS_postgres_user;
-    pg_config.password = FLAGS_postgres_password;
-
-    auto pg_client = std::make_shared<ifex::offboard::PostgresClient>(pg_config);
-    if (!pg_client->is_connected()) {
-        LOG(ERROR) << "Failed to connect to PostgreSQL";
-        return 1;
-    }
-    LOG(INFO) << "Connected to PostgreSQL";
-
-    // Create RPC request manager
-    auto request_manager = std::make_shared<ifex::cloud::dispatcher::RpcRequestManager>(
-        pg_client);
+    // Create RPC request manager (in-memory tracking)
+    auto request_manager = std::make_shared<ifex::cloud::dispatcher::RpcRequestManager>();
 
     // Create request producer (for c2v)
     ifex::cloud::dispatcher::RequestProducerConfig producer_config;
@@ -92,7 +68,7 @@ int main(int argc, char* argv[]) {
 
     // Create service implementation
     auto service_impl = std::make_unique<ifex::cloud::dispatcher::CloudDispatcherServiceImpl>(
-        pg_client, request_manager, producer);
+        request_manager, producer);
 
     // Create and start gRPC server
     ifex::cloud::GrpcServiceBase server(grpc_config);

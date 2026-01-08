@@ -28,18 +28,13 @@ RpcStatus rpc_status_from_int(int value) {
     return RpcStatus::ERROR;
 }
 
-RpcRequestManager::RpcRequestManager(std::shared_ptr<ifex::offboard::PostgresClient> db)
-    : db_(std::move(db)) {
-
+RpcRequestManager::RpcRequestManager(Config config)
+    : config_(std::move(config)) {
     // Start cleanup thread
-    cleanup_thread_ = std::thread([this]() {
-        while (running_) {
-            std::this_thread::sleep_for(std::chrono::seconds(5));
-            if (running_) {
-                cleanup_expired();
-            }
-        }
-    });
+    cleanup_thread_ = std::thread([this]() { cleanup_thread_func(); });
+    LOG(INFO) << "RpcRequestManager started with pending_timeout="
+              << config_.pending_timeout.count() << "s, completed_ttl="
+              << config_.completed_ttl.count() << "s";
 }
 
 RpcRequestManager::~RpcRequestManager() {
@@ -47,6 +42,11 @@ RpcRequestManager::~RpcRequestManager() {
     if (cleanup_thread_.joinable()) {
         cleanup_thread_.join();
     }
+    LOG(INFO) << "RpcRequestManager stopped. Stats: created=" << stats_.requests_created
+              << " received=" << stats_.responses_received
+              << " matched=" << stats_.responses_matched
+              << " orphaned=" << stats_.responses_orphaned
+              << " timed_out=" << stats_.requests_timed_out;
 }
 
 std::string RpcRequestManager::generate_correlation_id() {
@@ -70,165 +70,185 @@ std::string RpcRequestManager::create_request(
     std::chrono::milliseconds timeout) {
 
     std::string correlation_id = generate_correlation_id();
+    auto now = std::chrono::steady_clock::now();
 
-    // Create pending request
-    auto request = std::make_shared<PendingRequest>();
-    request->correlation_id = correlation_id;
-    request->vehicle_id = vehicle_id;
-    request->service_name = service_name;
-    request->method_name = method_name;
-    request->deadline = std::chrono::steady_clock::now() + timeout;
+    // Use provided timeout or default
+    auto actual_timeout = timeout.count() > 0
+        ? timeout
+        : std::chrono::duration_cast<std::chrono::milliseconds>(config_.pending_timeout);
+
+    PendingRequest request;
+    request.correlation_id = correlation_id;
+    request.vehicle_id = vehicle_id;
+    request.service_name = service_name;
+    request.method_name = method_name;
+    request.requester_id = requester_id;
+    request.created_at = now;
+    request.deadline = now + actual_timeout;
+    request.status = RpcStatus::PENDING;
 
     {
         std::lock_guard<std::mutex> lock(pending_mutex_);
-        pending_requests_[correlation_id] = request;
+        pending_requests_[correlation_id] = std::move(request);
     }
 
-    // Store in database
-    store_request(correlation_id, vehicle_id, service_name, method_name,
-                  parameters_json, requester_id);
+    stats_.requests_created++;
 
-    LOG(INFO) << "Created RPC request " << correlation_id
-              << " vehicle=" << vehicle_id
-              << " method=" << service_name << "." << method_name;
+    VLOG(1) << "Created RPC request " << correlation_id
+            << " vehicle=" << vehicle_id
+            << " method=" << service_name << "." << method_name
+            << " timeout=" << actual_timeout.count() << "ms";
 
     return correlation_id;
 }
 
-bool RpcRequestManager::wait_for_response(
-    const std::string& correlation_id,
-    std::chrono::milliseconds timeout,
-    RpcResponse& response) {
-
-    std::shared_ptr<PendingRequest> request;
-    {
-        std::lock_guard<std::mutex> lock(pending_mutex_);
-        auto it = pending_requests_.find(correlation_id);
-        if (it == pending_requests_.end()) {
-            LOG(WARNING) << "Request not found: " << correlation_id;
-            return false;
-        }
-        request = it->second;
-    }
-
-    // Wait for response or timeout
-    std::unique_lock<std::mutex> lock(request->mutex);
-    bool completed = request->cv.wait_for(lock, timeout, [&request]() {
-        return request->completed;
-    });
-
-    if (!completed) {
-        // Timeout
-        request->status = RpcStatus::TIMEOUT;
-        request->error_message = "Request timed out";
-        update_request_status(correlation_id, RpcStatus::TIMEOUT, "", "Request timed out");
-    }
-
-    // Build response
-    response.correlation_id = correlation_id;
-    response.vehicle_id = request->vehicle_id;
-    response.status = request->status;
-    response.result_json = request->result_json;
-    response.error_message = request->error_message;
-
-    // Clean up pending request
-    {
-        std::lock_guard<std::mutex> plock(pending_mutex_);
-        pending_requests_.erase(correlation_id);
-    }
-
-    return completed && request->status == RpcStatus::SUCCESS;
-}
-
 void RpcRequestManager::on_response(const RpcResponse& response) {
-    LOG(INFO) << "Received RPC response: correlation_id=" << response.correlation_id
-              << " status=" << rpc_status_to_string(response.status);
+    stats_.responses_received++;
 
-    std::shared_ptr<PendingRequest> request;
+    VLOG(1) << "Received RPC response: correlation_id=" << response.correlation_id
+            << " status=" << rpc_status_to_string(response.status);
+
+    // Find and remove from pending
+    PendingRequest pending;
+    bool found = false;
     {
         std::lock_guard<std::mutex> lock(pending_mutex_);
         auto it = pending_requests_.find(response.correlation_id);
-        if (it == pending_requests_.end()) {
-            LOG(WARNING) << "Response for unknown request: " << response.correlation_id;
-            return;
+        if (it != pending_requests_.end()) {
+            pending = std::move(it->second);
+            pending_requests_.erase(it);
+            found = true;
         }
-        request = it->second;
     }
 
-    // Update request
+    if (!found) {
+        // Response for unknown/expired request
+        stats_.responses_orphaned++;
+        LOG(WARNING) << "Response for unknown request: " << response.correlation_id;
+        return;
+    }
+
+    stats_.responses_matched++;
+
+    // Create completed response
+    auto now = std::chrono::steady_clock::now();
+    CompletedResponse completed;
+    completed.correlation_id = response.correlation_id;
+    completed.vehicle_id = pending.vehicle_id;
+    completed.service_name = pending.service_name;
+    completed.method_name = pending.method_name;
+    completed.requester_id = pending.requester_id;
+    completed.status = response.status;
+    completed.result_json = response.result_json;
+    completed.error_message = response.error_message;
+    completed.execution_time_ms = response.execution_time_ms;
+    completed.created_at = pending.created_at;
+    completed.completed_at = now;
+    completed.expires_at = now + config_.completed_ttl;
+
+    // Store in completed map
     {
-        std::lock_guard<std::mutex> lock(request->mutex);
-        request->completed = true;
-        request->status = response.status;
-        request->result_json = response.result_json;
-        request->error_message = response.error_message;
+        std::lock_guard<std::mutex> lock(completed_mutex_);
+        completed_responses_[response.correlation_id] = std::move(completed);
     }
 
-    // Update database
-    update_request_status(response.correlation_id, response.status,
-                          response.result_json, response.error_message);
-
-    // Notify waiting thread
-    request->cv.notify_one();
+    LOG(INFO) << "RPC completed: correlation_id=" << response.correlation_id
+              << " status=" << rpc_status_to_string(response.status)
+              << " duration=" << response.execution_time_ms << "ms";
 }
 
 bool RpcRequestManager::cancel_request(const std::string& correlation_id) {
-    std::shared_ptr<PendingRequest> request;
+    // Remove from pending
+    PendingRequest pending;
+    bool found = false;
     {
         std::lock_guard<std::mutex> lock(pending_mutex_);
         auto it = pending_requests_.find(correlation_id);
-        if (it == pending_requests_.end()) {
-            return false;
+        if (it != pending_requests_.end()) {
+            pending = std::move(it->second);
+            pending_requests_.erase(it);
+            found = true;
         }
-        request = it->second;
     }
 
-    // Update request
+    if (!found) {
+        return false;
+    }
+
+    stats_.requests_cancelled++;
+
+    // Create cancelled completion record
+    auto now = std::chrono::steady_clock::now();
+    CompletedResponse completed;
+    completed.correlation_id = correlation_id;
+    completed.vehicle_id = pending.vehicle_id;
+    completed.service_name = pending.service_name;
+    completed.method_name = pending.method_name;
+    completed.requester_id = pending.requester_id;
+    completed.status = RpcStatus::CANCELLED;
+    completed.error_message = "Request cancelled by user";
+    completed.created_at = pending.created_at;
+    completed.completed_at = now;
+    completed.expires_at = now + config_.completed_ttl;
+
     {
-        std::lock_guard<std::mutex> lock(request->mutex);
-        request->completed = true;
-        request->status = RpcStatus::CANCELLED;
-        request->error_message = "Request cancelled by user";
+        std::lock_guard<std::mutex> lock(completed_mutex_);
+        completed_responses_[correlation_id] = std::move(completed);
     }
-
-    // Update database
-    update_request_status(correlation_id, RpcStatus::CANCELLED, "", "Request cancelled by user");
-
-    // Notify waiting thread
-    request->cv.notify_one();
 
     LOG(INFO) << "Cancelled RPC request: " << correlation_id;
     return true;
 }
 
 std::optional<RpcRequestInfo> RpcRequestManager::get_request(const std::string& correlation_id) {
-    const char* sql = R"(
-        SELECT correlation_id, vehicle_id, service_name, method_name,
-               requester_id, status, created_at_ns, completed_at_ns,
-               result_json, error_message
-        FROM rpc_requests
-        WHERE correlation_id = $1
-    )";
-
-    auto result = db_->execute(sql, {correlation_id});
-    if (result.num_rows() == 0) {
-        return std::nullopt;
+    // Check completed first (most common case for polling)
+    {
+        std::lock_guard<std::mutex> lock(completed_mutex_);
+        auto it = completed_responses_.find(correlation_id);
+        if (it != completed_responses_.end()) {
+            const auto& resp = it->second;
+            RpcRequestInfo info;
+            info.correlation_id = resp.correlation_id;
+            info.vehicle_id = resp.vehicle_id;
+            info.service_name = resp.service_name;
+            info.method_name = resp.method_name;
+            info.requester_id = resp.requester_id;
+            info.status = resp.status;
+            info.created_at_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                resp.created_at.time_since_epoch()).count();
+            info.completed_at_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                resp.completed_at.time_since_epoch()).count();
+            info.result_json = resp.result_json;
+            info.error_message = resp.error_message;
+            info.execution_time_ms = resp.execution_time_ms;
+            return info;
+        }
     }
 
-    auto row = result.row(0);
-    RpcRequestInfo info;
-    info.correlation_id = row.get_string(0);
-    info.vehicle_id = row.get_string(1);
-    info.service_name = row.get_string(2);
-    info.method_name = row.get_string(3);
-    info.requester_id = row.get_string(4);
-    info.status = rpc_status_from_int(row.get_int(5));
-    info.created_at_ns = row.get_int64(6);
-    info.completed_at_ns = row.get_int64(7);
-    info.result_json = row.get_string(8);
-    info.error_message = row.get_string(9);
+    // Check pending
+    {
+        std::lock_guard<std::mutex> lock(pending_mutex_);
+        auto it = pending_requests_.find(correlation_id);
+        if (it != pending_requests_.end()) {
+            const auto& req = it->second;
+            RpcRequestInfo info;
+            info.correlation_id = req.correlation_id;
+            info.vehicle_id = req.vehicle_id;
+            info.service_name = req.service_name;
+            info.method_name = req.method_name;
+            info.requester_id = req.requester_id;
+            info.status = req.status;
+            info.created_at_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                req.created_at.time_since_epoch()).count();
+            info.completed_at_ms = 0;
+            info.result_json = "";
+            info.error_message = "";
+            info.execution_time_ms = 0;
+            return info;
+        }
+    }
 
-    return info;
+    return std::nullopt;
 }
 
 std::vector<RpcRequestInfo> RpcRequestManager::list_requests(
@@ -238,70 +258,122 @@ std::vector<RpcRequestInfo> RpcRequestManager::list_requests(
     int limit,
     int offset) {
 
-    std::string sql = R"(
-        SELECT correlation_id, vehicle_id, service_name, method_name,
-               requester_id, status, created_at_ns, completed_at_ns,
-               result_json, error_message
-        FROM rpc_requests
-        WHERE 1=1
-    )";
+    std::vector<RpcRequestInfo> results;
+    int skipped = 0;
 
-    std::vector<std::string> params;
-    int param_idx = 1;
+    auto matches_filters = [&](const std::string& vehicle_id,
+                               const std::string& service_name,
+                               RpcStatus status) {
+        if (!vehicle_id_filter.empty() && vehicle_id != vehicle_id_filter) {
+            return false;
+        }
+        if (!service_filter.empty() && service_name != service_filter) {
+            return false;
+        }
+        // status_filter: PENDING means "all" for backwards compatibility
+        if (status_filter != RpcStatus::PENDING && status != status_filter) {
+            return false;
+        }
+        return true;
+    };
 
-    if (!vehicle_id_filter.empty()) {
-        sql += " AND vehicle_id = $" + std::to_string(param_idx++);
-        params.push_back(vehicle_id_filter);
-    }
-    if (!service_filter.empty()) {
-        sql += " AND service_name = $" + std::to_string(param_idx++);
-        params.push_back(service_filter);
-    }
-    if (status_filter != RpcStatus::PENDING || params.size() > 0) {
-        // Only filter by status if explicitly specified
-        if (static_cast<int>(status_filter) >= 0) {
-            sql += " AND status = $" + std::to_string(param_idx++);
-            params.push_back(std::to_string(static_cast<int>(status_filter)));
+    // Add pending requests
+    {
+        std::lock_guard<std::mutex> lock(pending_mutex_);
+        for (const auto& [corr_id, req] : pending_requests_) {
+            if (!matches_filters(req.vehicle_id, req.service_name, req.status)) {
+                continue;
+            }
+            if (skipped < offset) {
+                ++skipped;
+                continue;
+            }
+            if (static_cast<int>(results.size()) >= limit) {
+                break;
+            }
+
+            RpcRequestInfo info;
+            info.correlation_id = req.correlation_id;
+            info.vehicle_id = req.vehicle_id;
+            info.service_name = req.service_name;
+            info.method_name = req.method_name;
+            info.requester_id = req.requester_id;
+            info.status = req.status;
+            info.created_at_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                req.created_at.time_since_epoch()).count();
+            info.completed_at_ms = 0;
+            info.result_json = "";
+            info.error_message = "";
+            info.execution_time_ms = 0;
+            results.push_back(std::move(info));
         }
     }
 
-    sql += " ORDER BY created_at_ns DESC";
-    sql += " LIMIT $" + std::to_string(param_idx++);
-    params.push_back(std::to_string(limit));
-    sql += " OFFSET $" + std::to_string(param_idx++);
-    params.push_back(std::to_string(offset));
+    // Add completed responses (if not at limit)
+    if (static_cast<int>(results.size()) < limit) {
+        std::lock_guard<std::mutex> lock(completed_mutex_);
+        for (const auto& [corr_id, resp] : completed_responses_) {
+            if (!matches_filters(resp.vehicle_id, resp.service_name, resp.status)) {
+                continue;
+            }
+            if (skipped < offset) {
+                ++skipped;
+                continue;
+            }
+            if (static_cast<int>(results.size()) >= limit) {
+                break;
+            }
 
-    auto result = db_->execute(sql, params);
-    std::vector<RpcRequestInfo> requests;
-
-    for (int i = 0; i < result.num_rows(); ++i) {
-        auto row = result.row(i);
-        RpcRequestInfo info;
-        info.correlation_id = row.get_string(0);
-        info.vehicle_id = row.get_string(1);
-        info.service_name = row.get_string(2);
-        info.method_name = row.get_string(3);
-        info.requester_id = row.get_string(4);
-        info.status = rpc_status_from_int(row.get_int(5));
-        info.created_at_ns = row.get_int64(6);
-        info.completed_at_ns = row.get_int64(7);
-        info.result_json = row.get_string(8);
-        info.error_message = row.get_string(9);
-        requests.push_back(std::move(info));
+            RpcRequestInfo info;
+            info.correlation_id = resp.correlation_id;
+            info.vehicle_id = resp.vehicle_id;
+            info.service_name = resp.service_name;
+            info.method_name = resp.method_name;
+            info.requester_id = resp.requester_id;
+            info.status = resp.status;
+            info.created_at_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                resp.created_at.time_since_epoch()).count();
+            info.completed_at_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                resp.completed_at.time_since_epoch()).count();
+            info.result_json = resp.result_json;
+            info.error_message = resp.error_message;
+            info.execution_time_ms = resp.execution_time_ms;
+            results.push_back(std::move(info));
+        }
     }
 
-    return requests;
+    return results;
 }
 
-void RpcRequestManager::cleanup_expired() {
-    std::vector<std::string> expired_ids;
+size_t RpcRequestManager::pending_count() const {
+    std::lock_guard<std::mutex> lock(pending_mutex_);
+    return pending_requests_.size();
+}
+
+size_t RpcRequestManager::completed_count() const {
+    std::lock_guard<std::mutex> lock(completed_mutex_);
+    return completed_responses_.size();
+}
+
+void RpcRequestManager::cleanup_thread_func() {
+    while (running_) {
+        std::this_thread::sleep_for(config_.cleanup_interval);
+        if (running_) {
+            cleanup_expired_pending();
+            cleanup_expired_completed();
+        }
+    }
+}
+
+void RpcRequestManager::cleanup_expired_pending() {
     auto now = std::chrono::steady_clock::now();
+    std::vector<PendingRequest> expired;
 
     {
         std::lock_guard<std::mutex> lock(pending_mutex_);
         for (auto it = pending_requests_.begin(); it != pending_requests_.end(); ) {
-            if (it->second->deadline < now) {
-                expired_ids.push_back(it->first);
+            if (it->second.deadline < now) {
+                expired.push_back(std::move(it->second));
                 it = pending_requests_.erase(it);
             } else {
                 ++it;
@@ -309,68 +381,52 @@ void RpcRequestManager::cleanup_expired() {
         }
     }
 
-    // Update database for expired requests
-    for (const auto& id : expired_ids) {
-        update_request_status(id, RpcStatus::TIMEOUT, "", "Request expired");
-        LOG(WARNING) << "RPC request expired: " << id;
+    // Move expired to completed with TIMEOUT status
+    if (!expired.empty()) {
+        std::lock_guard<std::mutex> lock(completed_mutex_);
+        for (auto& req : expired) {
+            stats_.requests_timed_out++;
+
+            CompletedResponse completed;
+            completed.correlation_id = req.correlation_id;
+            completed.vehicle_id = req.vehicle_id;
+            completed.service_name = req.service_name;
+            completed.method_name = req.method_name;
+            completed.requester_id = req.requester_id;
+            completed.status = RpcStatus::TIMEOUT;
+            completed.error_message = "Request timed out waiting for vehicle response";
+            completed.created_at = req.created_at;
+            completed.completed_at = now;
+            completed.expires_at = now + config_.completed_ttl;
+
+            completed_responses_[req.correlation_id] = std::move(completed);
+
+            LOG(WARNING) << "RPC request timed out: " << req.correlation_id
+                         << " vehicle=" << req.vehicle_id;
+        }
     }
 }
 
-void RpcRequestManager::store_request(
-    const std::string& correlation_id,
-    const std::string& vehicle_id,
-    const std::string& service_name,
-    const std::string& method_name,
-    const std::string& parameters_json,
-    const std::string& requester_id) {
+void RpcRequestManager::cleanup_expired_completed() {
+    auto now = std::chrono::steady_clock::now();
+    size_t evicted = 0;
 
-    const char* sql = R"(
-        INSERT INTO rpc_requests
-            (correlation_id, vehicle_id, service_name, method_name,
-             parameters_json, requester_id, status, created_at_ns)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-    )";
+    {
+        std::lock_guard<std::mutex> lock(completed_mutex_);
+        for (auto it = completed_responses_.begin(); it != completed_responses_.end(); ) {
+            if (it->second.expires_at < now) {
+                it = completed_responses_.erase(it);
+                evicted++;
+            } else {
+                ++it;
+            }
+        }
+    }
 
-    auto now_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
-        std::chrono::system_clock::now().time_since_epoch()).count();
-
-    db_->execute(sql, {
-        correlation_id,
-        vehicle_id,
-        service_name,
-        method_name,
-        parameters_json,
-        requester_id,
-        std::to_string(static_cast<int>(RpcStatus::PENDING)),
-        std::to_string(now_ns)
-    });
-}
-
-void RpcRequestManager::update_request_status(
-    const std::string& correlation_id,
-    RpcStatus status,
-    const std::string& result_json,
-    const std::string& error_message) {
-
-    const char* sql = R"(
-        UPDATE rpc_requests
-        SET status = $2,
-            result_json = $3,
-            error_message = $4,
-            completed_at_ns = $5
-        WHERE correlation_id = $1
-    )";
-
-    auto now_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
-        std::chrono::system_clock::now().time_since_epoch()).count();
-
-    db_->execute(sql, {
-        correlation_id,
-        std::to_string(static_cast<int>(status)),
-        result_json,
-        error_message,
-        std::to_string(now_ns)
-    });
+    if (evicted > 0) {
+        stats_.completed_evicted += evicted;
+        VLOG(1) << "Evicted " << evicted << " expired completed responses";
+    }
 }
 
 }  // namespace dispatcher

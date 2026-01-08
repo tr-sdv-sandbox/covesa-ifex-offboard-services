@@ -2,7 +2,6 @@
 
 #include <atomic>
 #include <chrono>
-#include <condition_variable>
 #include <functional>
 #include <map>
 #include <memory>
@@ -10,8 +9,7 @@
 #include <optional>
 #include <string>
 #include <thread>
-
-#include "postgres_client.hpp"
+#include <vector>
 
 namespace ifex {
 namespace cloud {
@@ -27,22 +25,35 @@ enum class RpcStatus {
     CANCELLED = 5
 };
 
-/// Pending RPC request
+/// Pending RPC request (in-memory tracking)
 struct PendingRequest {
     std::string correlation_id;
     std::string vehicle_id;
     std::string service_name;
     std::string method_name;
+    std::string requester_id;
+    std::chrono::steady_clock::time_point created_at;
     std::chrono::steady_clock::time_point deadline;
-    std::condition_variable cv;
-    std::mutex mutex;
-    bool completed = false;
     RpcStatus status = RpcStatus::PENDING;
-    std::string result_json;
-    std::string error_message;
 };
 
-/// RPC response from vehicle
+/// Completed RPC response (stored for retrieval)
+struct CompletedResponse {
+    std::string correlation_id;
+    std::string vehicle_id;
+    std::string service_name;
+    std::string method_name;
+    std::string requester_id;
+    RpcStatus status;
+    std::string result_json;
+    std::string error_message;
+    int64_t execution_time_ms = 0;
+    std::chrono::steady_clock::time_point created_at;
+    std::chrono::steady_clock::time_point completed_at;
+    std::chrono::steady_clock::time_point expires_at;
+};
+
+/// RPC response from vehicle (incoming)
 struct RpcResponse {
     std::string correlation_id;
     std::string vehicle_id;
@@ -52,7 +63,7 @@ struct RpcResponse {
     int64_t execution_time_ms;
 };
 
-/// RPC request info for listing
+/// RPC request info for listing (returned by get_request/list_requests)
 struct RpcRequestInfo {
     std::string correlation_id;
     std::string vehicle_id;
@@ -60,27 +71,52 @@ struct RpcRequestInfo {
     std::string method_name;
     std::string requester_id;
     RpcStatus status;
-    int64_t created_at_ns;
-    int64_t completed_at_ns;
+    int64_t created_at_ms;
+    int64_t completed_at_ms;
     std::string result_json;
     std::string error_message;
+    int64_t execution_time_ms;
+};
+
+/// Statistics for monitoring
+struct RpcManagerStats {
+    std::atomic<uint64_t> requests_created{0};
+    std::atomic<uint64_t> responses_received{0};
+    std::atomic<uint64_t> responses_matched{0};
+    std::atomic<uint64_t> responses_orphaned{0};  // response for unknown request
+    std::atomic<uint64_t> requests_timed_out{0};
+    std::atomic<uint64_t> requests_cancelled{0};
+    std::atomic<uint64_t> completed_evicted{0};   // evicted from completed cache
+};
+
+/// RpcRequestManager configuration
+struct RpcManagerConfig {
+    std::chrono::seconds pending_timeout{30};      // Max time to wait for response
+    std::chrono::seconds completed_ttl{300};       // Keep completed responses for 5 min
+    std::chrono::seconds cleanup_interval{5};      // Cleanup thread interval
 };
 
 /**
- * Manages RPC request correlation and tracking
+ * Manages RPC request correlation and tracking (in-memory only)
  *
- * - Tracks pending requests by correlation_id
- * - Handles timeouts
- * - Stores request/response in PostgreSQL
- * - Provides synchronous wait for response
+ * Async-only design for scalability (100K+ concurrent requests):
+ * - create_request() returns correlation_id immediately
+ * - on_response() stores response in completed_responses_ map
+ * - get_request() retrieves status/result by correlation_id
+ * - Cleanup thread handles timeouts and TTL eviction
+ *
+ * No blocking waits - all operations are non-blocking.
+ * RPCs are ephemeral - no database persistence.
  */
 class RpcRequestManager {
 public:
-    explicit RpcRequestManager(std::shared_ptr<ifex::offboard::PostgresClient> db);
+    using Config = RpcManagerConfig;
+
+    explicit RpcRequestManager(Config config = {});
     ~RpcRequestManager();
 
     /**
-     * Create a new RPC request
+     * Create a new RPC request (async - returns immediately)
      * @return correlation_id for tracking
      */
     std::string create_request(
@@ -92,17 +128,8 @@ public:
         std::chrono::milliseconds timeout);
 
     /**
-     * Wait for a response (synchronous call)
-     * @return true if response received, false if timeout
-     */
-    bool wait_for_response(
-        const std::string& correlation_id,
-        std::chrono::milliseconds timeout,
-        RpcResponse& response);
-
-    /**
      * Handle incoming response from vehicle
-     * Called by response consumer
+     * Called by response consumer - stores in completed_responses_
      */
     void on_response(const RpcResponse& response);
 
@@ -112,12 +139,12 @@ public:
     bool cancel_request(const std::string& correlation_id);
 
     /**
-     * Get request status
+     * Get request status/result (checks pending then completed)
      */
     std::optional<RpcRequestInfo> get_request(const std::string& correlation_id);
 
     /**
-     * List recent requests
+     * List requests (both pending and completed)
      */
     std::vector<RpcRequestInfo> list_requests(
         const std::string& vehicle_id_filter,
@@ -127,29 +154,34 @@ public:
         int offset);
 
     /**
-     * Clean up expired pending requests
-     * Called periodically by cleanup thread
+     * Get statistics
      */
-    void cleanup_expired();
+    const RpcManagerStats& stats() const { return stats_; }
+
+    /**
+     * Get current counts
+     */
+    size_t pending_count() const;
+    size_t completed_count() const;
 
 private:
     std::string generate_correlation_id();
-    void store_request(const std::string& correlation_id,
-                       const std::string& vehicle_id,
-                       const std::string& service_name,
-                       const std::string& method_name,
-                       const std::string& parameters_json,
-                       const std::string& requester_id);
-    void update_request_status(const std::string& correlation_id,
-                                RpcStatus status,
-                                const std::string& result_json = "",
-                                const std::string& error_message = "");
+    void cleanup_thread_func();
+    void cleanup_expired_pending();
+    void cleanup_expired_completed();
 
-    std::shared_ptr<ifex::offboard::PostgresClient> db_;
+    Config config_;
 
-    // Pending requests (in-memory for fast lookup)
-    std::mutex pending_mutex_;
-    std::map<std::string, std::shared_ptr<PendingRequest>> pending_requests_;
+    // Pending requests (waiting for response)
+    mutable std::mutex pending_mutex_;
+    std::map<std::string, PendingRequest> pending_requests_;
+
+    // Completed responses (queryable with TTL)
+    mutable std::mutex completed_mutex_;
+    std::map<std::string, CompletedResponse> completed_responses_;
+
+    // Statistics
+    RpcManagerStats stats_;
 
     // Cleanup thread
     std::atomic<bool> running_{true};

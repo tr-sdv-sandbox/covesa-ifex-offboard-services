@@ -2,6 +2,7 @@
 
 #include <glog/logging.h>
 #include <chrono>
+#include <thread>
 
 #include "dispatcher-rpc-envelope.pb.h"
 
@@ -10,11 +11,9 @@ namespace cloud {
 namespace dispatcher {
 
 CloudDispatcherServiceImpl::CloudDispatcherServiceImpl(
-    std::shared_ptr<ifex::offboard::PostgresClient> db,
     std::shared_ptr<RpcRequestManager> request_manager,
     std::shared_ptr<RequestProducer> producer)
-    : db_(std::move(db)),
-      request_manager_(std::move(request_manager)),
+    : request_manager_(std::move(request_manager)),
       producer_(std::move(producer)) {}
 
 std::string CloudDispatcherServiceImpl::build_request_payload(
@@ -32,9 +31,9 @@ std::string CloudDispatcherServiceImpl::build_request_payload(
     request.set_parameters_json(parameters_json);
     request.set_timeout_ms(timeout_ms);
 
-    auto now_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+    auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
-    request.set_request_timestamp_ns(now_ns);
+    request.set_request_timestamp_ms(now_ms);
 
     return request.SerializeAsString();
 }
@@ -43,6 +42,9 @@ grpc::Status CloudDispatcherServiceImpl::CallMethod(
     grpc::ServerContext* context,
     const CallMethodRequest* request,
     CallMethodResponse* response) {
+
+    // DEPRECATED: Sync CallMethod blocks a gRPC thread. Use CallMethodAsync + GetRpcStatus.
+    LOG(WARNING) << "CallMethod (sync) is deprecated for scalability. Use CallMethodAsync.";
 
     if (request->vehicle_id().empty()) {
         return grpc::Status(grpc::INVALID_ARGUMENT, "vehicle_id is required");
@@ -86,34 +88,46 @@ grpc::Status CloudDispatcherServiceImpl::CallMethod(
             return grpc::Status(grpc::INTERNAL, "Failed to send request to Kafka");
         }
 
-        // Wait for response
-        RpcResponse rpc_response;
-        bool success = request_manager_->wait_for_response(
-            correlation_id,
-            std::chrono::milliseconds(timeout_ms),
-            rpc_response);
+        // Poll for response (blocking, but no condition_variable needed)
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+        constexpr auto poll_interval = std::chrono::milliseconds(50);
 
-        // Build gRPC response
-        response->set_correlation_id(correlation_id);
+        while (std::chrono::steady_clock::now() < deadline) {
+            auto info = request_manager_->get_request(correlation_id);
+            if (info && info->status != RpcStatus::PENDING && info->status != RpcStatus::IN_PROGRESS) {
+                // Request completed
+                response->set_correlation_id(correlation_id);
 
-        switch (rpc_response.status) {
-            case RpcStatus::SUCCESS:
-                response->set_status(::ifex::cloud::dispatcher::CLOUD_RPC_SUCCESS);
-                break;
-            case RpcStatus::TIMEOUT:
-                response->set_status(::ifex::cloud::dispatcher::CLOUD_RPC_TIMEOUT);
-                break;
-            case RpcStatus::CANCELLED:
-                response->set_status(::ifex::cloud::dispatcher::CLOUD_RPC_CANCELLED);
-                break;
-            case RpcStatus::ERROR:
-            default:
-                response->set_status(::ifex::cloud::dispatcher::CLOUD_RPC_FAILED);
-                break;
+                switch (info->status) {
+                    case RpcStatus::SUCCESS:
+                        response->set_status(::ifex::cloud::dispatcher::CLOUD_RPC_SUCCESS);
+                        break;
+                    case RpcStatus::TIMEOUT:
+                        response->set_status(::ifex::cloud::dispatcher::CLOUD_RPC_TIMEOUT);
+                        break;
+                    case RpcStatus::CANCELLED:
+                        response->set_status(::ifex::cloud::dispatcher::CLOUD_RPC_CANCELLED);
+                        break;
+                    case RpcStatus::ERROR:
+                    default:
+                        response->set_status(::ifex::cloud::dispatcher::CLOUD_RPC_FAILED);
+                        break;
+                }
+
+                response->set_result_json(info->result_json);
+                response->set_error_message(info->error_message);
+                response->set_duration_ms(info->execution_time_ms);
+
+                return grpc::Status::OK;
+            }
+
+            std::this_thread::sleep_for(poll_interval);
         }
 
-        response->set_result_json(rpc_response.result_json);
-        response->set_error_message(rpc_response.error_message);
+        // Timeout
+        response->set_correlation_id(correlation_id);
+        response->set_status(::ifex::cloud::dispatcher::CLOUD_RPC_TIMEOUT);
+        response->set_error_message("Request timed out");
 
         return grpc::Status::OK;
 
@@ -223,8 +237,11 @@ grpc::Status CloudDispatcherServiceImpl::GetRpcStatus(
 
         response->set_result_json(info->result_json);
         response->set_error_message(info->error_message);
-        response->set_created_at_ns(info->created_at_ns);
-        response->set_responded_at_ns(info->completed_at_ns);
+        response->set_created_at_ms(info->created_at_ms);
+        response->set_responded_at_ms(info->completed_at_ms);
+        response->set_duration_ms(info->execution_time_ms);
+        response->set_completed(info->status != RpcStatus::PENDING &&
+                                info->status != RpcStatus::IN_PROGRESS);
 
         return grpc::Status::OK;
 
@@ -299,8 +316,8 @@ grpc::Status CloudDispatcherServiceImpl::ListRpcRequests(
                     break;
             }
 
-            req->set_created_at_ns(info.created_at_ns);
-            req->set_responded_at_ns(info.completed_at_ns);
+            req->set_created_at_ms(info.created_at_ms);
+            req->set_responded_at_ms(info.completed_at_ms);
         }
 
         if (static_cast<int>(requests.size()) == page_size) {

@@ -5,7 +5,6 @@
 #include "cloud-dispatcher-service.grpc.pb.h"
 #include "rpc_request_manager.hpp"
 #include "request_producer.hpp"
-#include "postgres_client.hpp"
 
 namespace ifex {
 namespace cloud {
@@ -14,13 +13,12 @@ namespace dispatcher {
 /**
  * Cloud Dispatcher Service gRPC implementation
  *
- * Routes RPC requests to vehicles via Kafka and tracks responses.
+ * Routes RPC requests to vehicles via Kafka and tracks responses in-memory.
  */
 class CloudDispatcherServiceImpl final
     : public ifex::cloud::dispatcher::CloudDispatcherService::Service {
 public:
     CloudDispatcherServiceImpl(
-        std::shared_ptr<ifex::offboard::PostgresClient> db,
         std::shared_ptr<RpcRequestManager> request_manager,
         std::shared_ptr<RequestProducer> producer);
 
@@ -70,7 +68,6 @@ private:
         const std::string& parameters_json,
         uint32_t timeout_ms);
 
-    std::shared_ptr<ifex::offboard::PostgresClient> db_;
     std::shared_ptr<RpcRequestManager> request_manager_;
     std::shared_ptr<RequestProducer> producer_;
 };
