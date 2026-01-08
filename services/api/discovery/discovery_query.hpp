@@ -26,8 +26,23 @@ struct VehicleSummaryData {
     int year = 0;
     int service_count = 0;
     int job_count = 0;
-    int64_t last_seen_ns = 0;
+    int64_t last_seen_ms = 0;
     bool is_online = false;
+};
+
+/**
+ * Service info from schema_registry (hash-based protocol)
+ */
+struct ServiceInfoData {
+    std::string schema_hash;
+    std::string service_name;
+    std::string version;
+    std::string ifex_schema;       // Full IFEX YAML
+    std::string methods_json;      // Pre-parsed methods
+    std::string structs_json;      // Pre-parsed struct definitions
+    std::string enums_json;        // Pre-parsed enum definitions
+    int64_t first_seen_ms = 0;
+    int64_t last_seen_ms = 0;
 };
 
 /**
@@ -37,12 +52,7 @@ struct ServiceLocationData {
     std::string vehicle_id;
     std::string fleet_id;
     std::string region;
-    std::string service_name;
-    std::string version;
-    std::string endpoint_address;
-    std::string transport_type;
-    int status = 0;
-    int64_t last_heartbeat_ms = 0;
+    ServiceInfoData service;
 };
 
 /**
@@ -87,9 +97,9 @@ public:
         int offset);
 
     /**
-     * Get services for a specific vehicle
+     * Get services for a specific vehicle (from schema_registry via vehicle_schemas)
      */
-    std::vector<query::ServiceLocationData> get_vehicle_services(
+    std::vector<query::ServiceInfoData> get_vehicle_services(
         const std::string& vehicle_id);
 
     /**
@@ -140,7 +150,7 @@ public:
     struct SyncState {
         int64_t discovery_sequence = 0;
         uint32_t state_checksum = 0;
-        int64_t updated_at_ns = 0;
+        int64_t updated_at_ms = 0;
     };
     std::optional<SyncState> get_sync_state(const std::string& vehicle_id);
 

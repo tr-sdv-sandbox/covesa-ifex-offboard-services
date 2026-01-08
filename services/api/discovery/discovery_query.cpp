@@ -9,6 +9,19 @@ namespace ifex {
 namespace cloud {
 namespace discovery {
 
+namespace {
+
+/// Convert status string to integer for ServiceStatus enum
+/// Values: 0=UNKNOWN, 1=AVAILABLE, 2=UNAVAILABLE, 3=DEGRADED
+int status_string_to_int(const std::string& status) {
+    if (status == "available") return 1;
+    if (status == "unavailable") return 2;
+    if (status == "degraded") return 3;
+    return 0;  // unknown
+}
+
+}  // namespace
+
 DiscoveryQuery::DiscoveryQuery(std::shared_ptr<ifex::offboard::PostgresClient> db)
     : db_(std::move(db)) {
 }
@@ -59,6 +72,9 @@ QueryResult<query::VehicleSummaryData> DiscoveryQuery::list_vehicles(
     if (with_services_only) {
         conditions.push_back("COALESCE(s.service_count, 0) > 0");
     }
+    if (online_only) {
+        conditions.push_back("v.is_online = true");
+    }
 
     std::string where_clause = conditions.empty() ? "" :
         "WHERE " + [&]() {
@@ -74,9 +90,10 @@ QueryResult<query::VehicleSummaryData> DiscoveryQuery::list_vehicles(
     std::string count_query = R"(
         SELECT COUNT(DISTINCT e.vehicle_id)
         FROM vehicle_enrichment e
+        LEFT JOIN vehicles v ON e.vehicle_id = v.vehicle_id
         LEFT JOIN (
             SELECT vehicle_id, COUNT(*) as service_count
-            FROM services
+            FROM vehicle_schemas
             GROUP BY vehicle_id
         ) s ON e.vehicle_id = s.vehicle_id
     )" + where_clause;
@@ -102,7 +119,7 @@ QueryResult<query::VehicleSummaryData> DiscoveryQuery::list_vehicles(
         LEFT JOIN vehicles v ON e.vehicle_id = v.vehicle_id
         LEFT JOIN (
             SELECT vehicle_id, COUNT(*) as service_count
-            FROM services
+            FROM vehicle_schemas
             GROUP BY vehicle_id
         ) s ON e.vehicle_id = s.vehicle_id
         LEFT JOIN (
@@ -112,8 +129,13 @@ QueryResult<query::VehicleSummaryData> DiscoveryQuery::list_vehicles(
         ) j ON e.vehicle_id = j.vehicle_id
     )" + where_clause + R"(
         ORDER BY e.vehicle_id
-        LIMIT $)" + std::to_string(param_idx++) + R"(
-        OFFSET $)" + std::to_string(param_idx++);
+    )";
+
+    // Add LIMIT and OFFSET with explicit parameter order to avoid undefined evaluation order
+    int limit_idx = param_idx++;
+    int offset_idx = param_idx++;
+    query += " LIMIT $" + std::to_string(limit_idx);
+    query += " OFFSET $" + std::to_string(offset_idx);
 
     params.push_back(std::to_string(page_size));
     params.push_back(std::to_string(offset));
@@ -126,9 +148,9 @@ QueryResult<query::VehicleSummaryData> DiscoveryQuery::list_vehicles(
         vs.fleet_id = row.get_string("fleet_id");
         vs.region = row.get_string("region");
         vs.model = row.get_string("model");
-        vs.year = row.get_int("year");
-        vs.service_count = row.get_int("service_count");
-        vs.job_count = row.get_int("job_count");
+        vs.year = row.is_null("year") ? 0 : row.get_int("year");
+        vs.service_count = row.is_null("service_count") ? 0 : row.get_int("service_count");
+        vs.job_count = row.is_null("job_count") ? 0 : row.get_int("job_count");
         vs.is_online = row.get_string("is_online") == "t";
         result.items.push_back(std::move(vs));
     }
@@ -142,42 +164,43 @@ QueryResult<query::VehicleSummaryData> DiscoveryQuery::list_vehicles(
     return result;
 }
 
-std::vector<query::ServiceLocationData> DiscoveryQuery::get_vehicle_services(
+std::vector<query::ServiceInfoData> DiscoveryQuery::get_vehicle_services(
     const std::string& vehicle_id) {
 
-    std::vector<query::ServiceLocationData> services;
+    std::vector<query::ServiceInfoData> services;
 
+    // Query schema_registry via vehicle_schemas junction table
     std::string query = R"(
         SELECT
-            s.vehicle_id,
-            e.fleet_id,
-            e.region,
-            s.service_name,
-            s.version,
-            s.endpoint_address,
-            s.transport_type,
-            s.status,
-            s.last_heartbeat_ms
-        FROM services s
-        JOIN vehicle_enrichment e ON s.vehicle_id = e.vehicle_id
-        WHERE s.vehicle_id = $1
-        ORDER BY s.service_name
+            sr.schema_hash,
+            sr.service_name,
+            sr.version,
+            sr.ifex_schema,
+            sr.methods::text AS methods_json,
+            sr.struct_definitions::text AS structs_json,
+            sr.enum_definitions::text AS enums_json,
+            (EXTRACT(EPOCH FROM sr.first_seen_at) * 1000000000)::bigint AS first_seen_ms,
+            (EXTRACT(EPOCH FROM vs.last_seen_at) * 1000000000)::bigint AS last_seen_ms
+        FROM vehicle_schemas vs
+        JOIN schema_registry sr ON vs.schema_hash = sr.schema_hash
+        WHERE vs.vehicle_id = $1
+        ORDER BY sr.service_name
     )";
 
     auto result = db_->execute(query, {vehicle_id});
     for (int i = 0; i < result.num_rows(); i++) {
         auto row = result.row(i);
-        query::ServiceLocationData sl;
-        sl.vehicle_id = row.get_string("vehicle_id");
-        sl.fleet_id = row.get_string("fleet_id");
-        sl.region = row.get_string("region");
-        sl.service_name = row.get_string("service_name");
-        sl.version = row.get_string("version");
-        sl.endpoint_address = row.get_string("endpoint_address");
-        sl.transport_type = row.get_string("transport_type");
-        sl.status = row.get_int("status");
-        sl.last_heartbeat_ms = row.get_int64("last_heartbeat_ms");
-        services.push_back(std::move(sl));
+        query::ServiceInfoData si;
+        si.schema_hash = row.get_string("schema_hash");
+        si.service_name = row.get_string("service_name");
+        si.version = row.get_string("version");
+        si.ifex_schema = row.get_string("ifex_schema");
+        si.methods_json = row.get_string("methods_json");
+        si.structs_json = row.get_string("structs_json");
+        si.enums_json = row.get_string("enums_json");
+        si.first_seen_ms = row.is_null("first_seen_ms") ? 0 : row.get_int64("first_seen_ms");
+        si.last_seen_ms = row.is_null("last_seen_ms") ? 0 : row.get_int64("last_seen_ms");
+        services.push_back(std::move(si));
     }
 
     return services;
@@ -198,7 +221,7 @@ QueryResult<query::ServiceLocationData> DiscoveryQuery::query_services_by_name(
     int param_idx = 1;
 
     // Name pattern (required)
-    conditions.push_back("s.service_name LIKE $" + std::to_string(param_idx++));
+    conditions.push_back("sr.service_name LIKE $" + std::to_string(param_idx++));
     params.push_back(to_sql_pattern(name_pattern));
 
     if (!fleet_id_filter.empty()) {
@@ -209,9 +232,7 @@ QueryResult<query::ServiceLocationData> DiscoveryQuery::query_services_by_name(
         conditions.push_back("e.region = $" + std::to_string(param_idx++));
         params.push_back(region_filter);
     }
-    if (available_only) {
-        conditions.push_back("s.status = 0");  // AVAILABLE = 0
-    }
+    // Note: available_only not applicable for hash-based protocol (no runtime status)
 
     std::string where_clause = "WHERE " + [&]() {
         std::string s;
@@ -225,8 +246,9 @@ QueryResult<query::ServiceLocationData> DiscoveryQuery::query_services_by_name(
     // Count query
     std::string count_query = R"(
         SELECT COUNT(*)
-        FROM services s
-        JOIN vehicle_enrichment e ON s.vehicle_id = e.vehicle_id
+        FROM vehicle_schemas vs
+        JOIN schema_registry sr ON vs.schema_hash = sr.schema_hash
+        LEFT JOIN vehicle_enrichment e ON vs.vehicle_id = e.vehicle_id
     )" + where_clause;
 
     auto count_result = db_->execute(count_query, params);
@@ -237,21 +259,30 @@ QueryResult<query::ServiceLocationData> DiscoveryQuery::query_services_by_name(
     // Data query
     std::string query = R"(
         SELECT
-            s.vehicle_id,
-            e.fleet_id,
-            e.region,
-            s.service_name,
-            s.version,
-            s.endpoint_address,
-            s.transport_type,
-            s.status,
-            s.last_heartbeat_ms
-        FROM services s
-        JOIN vehicle_enrichment e ON s.vehicle_id = e.vehicle_id
+            vs.vehicle_id,
+            COALESCE(e.fleet_id, '') AS fleet_id,
+            COALESCE(e.region, '') AS region,
+            sr.schema_hash,
+            sr.service_name,
+            sr.version,
+            sr.ifex_schema,
+            sr.methods::text AS methods_json,
+            sr.struct_definitions::text AS structs_json,
+            sr.enum_definitions::text AS enums_json,
+            (EXTRACT(EPOCH FROM sr.first_seen_at) * 1000000000)::bigint AS first_seen_ms,
+            (EXTRACT(EPOCH FROM vs.last_seen_at) * 1000000000)::bigint AS last_seen_ms
+        FROM vehicle_schemas vs
+        JOIN schema_registry sr ON vs.schema_hash = sr.schema_hash
+        LEFT JOIN vehicle_enrichment e ON vs.vehicle_id = e.vehicle_id
     )" + where_clause + R"(
-        ORDER by s.service_name, s.vehicle_id
-        LIMIT $)" + std::to_string(param_idx++) + R"(
-        OFFSET $)" + std::to_string(param_idx++);
+        ORDER BY sr.service_name, vs.vehicle_id
+    )";
+
+    // Add LIMIT and OFFSET with explicit parameter order
+    int limit_idx = param_idx++;
+    int offset_idx = param_idx++;
+    query += " LIMIT $" + std::to_string(limit_idx);
+    query += " OFFSET $" + std::to_string(offset_idx);
 
     params.push_back(std::to_string(page_size));
     params.push_back(std::to_string(offset));
@@ -263,12 +294,15 @@ QueryResult<query::ServiceLocationData> DiscoveryQuery::query_services_by_name(
         sl.vehicle_id = row.get_string("vehicle_id");
         sl.fleet_id = row.get_string("fleet_id");
         sl.region = row.get_string("region");
-        sl.service_name = row.get_string("service_name");
-        sl.version = row.get_string("version");
-        sl.endpoint_address = row.get_string("endpoint_address");
-        sl.transport_type = row.get_string("transport_type");
-        sl.status = row.get_int("status");
-        sl.last_heartbeat_ms = row.get_int64("last_heartbeat_ms");
+        sl.service.schema_hash = row.get_string("schema_hash");
+        sl.service.service_name = row.get_string("service_name");
+        sl.service.version = row.get_string("version");
+        sl.service.ifex_schema = row.get_string("ifex_schema");
+        sl.service.methods_json = row.get_string("methods_json");
+        sl.service.structs_json = row.get_string("structs_json");
+        sl.service.enums_json = row.get_string("enums_json");
+        sl.service.first_seen_ms = row.is_null("first_seen_ms") ? 0 : row.get_int64("first_seen_ms");
+        sl.service.last_seen_ms = row.is_null("last_seen_ms") ? 0 : row.get_int64("last_seen_ms");
         result.items.push_back(std::move(sl));
     }
 
@@ -311,13 +345,14 @@ std::vector<query::ServiceStatsData> DiscoveryQuery::get_fleet_service_stats(
 
     std::string query = R"(
         SELECT
-            s.service_name,
-            COUNT(DISTINCT s.vehicle_id) as vehicle_count,
-            COUNT(DISTINCT CASE WHEN s.status = 0 THEN s.vehicle_id END) as available_count
-        FROM services s
-        JOIN vehicle_enrichment e ON s.vehicle_id = e.vehicle_id
+            sr.service_name,
+            COUNT(DISTINCT vs.vehicle_id) as vehicle_count,
+            COUNT(DISTINCT vs.vehicle_id) as available_count
+        FROM vehicle_schemas vs
+        JOIN schema_registry sr ON vs.schema_hash = sr.schema_hash
+        JOIN vehicle_enrichment e ON vs.vehicle_id = e.vehicle_id
     )" + where_clause + R"(
-        GROUP BY s.service_name
+        GROUP BY sr.service_name
         ORDER BY vehicle_count DESC
     )";
 
@@ -372,9 +407,9 @@ DiscoveryQuery::FleetSummary DiscoveryQuery::get_fleet_summary(
 
     // Online vehicles (with services)
     std::string online_query = R"(
-        SELECT COUNT(DISTINCT s.vehicle_id)
-        FROM services s
-        JOIN vehicle_enrichment e ON s.vehicle_id = e.vehicle_id
+        SELECT COUNT(DISTINCT vs.vehicle_id)
+        FROM vehicle_schemas vs
+        JOIN vehicle_enrichment e ON vs.vehicle_id = e.vehicle_id
     )" + where_clause;
     result = db_->execute(online_query, params);
     if (result.num_rows() > 0) {
@@ -384,8 +419,8 @@ DiscoveryQuery::FleetSummary DiscoveryQuery::get_fleet_summary(
     // Total services
     std::string services_query = R"(
         SELECT COUNT(*)
-        FROM services s
-        JOIN vehicle_enrichment e ON s.vehicle_id = e.vehicle_id
+        FROM vehicle_schemas vs
+        JOIN vehicle_enrichment e ON vs.vehicle_id = e.vehicle_id
     )" + where_clause;
     result = db_->execute(services_query, params);
     if (result.num_rows() > 0) {
@@ -410,7 +445,7 @@ QueryResult<query::VehicleSummaryData> DiscoveryQuery::find_vehicles_with_servic
     std::vector<std::string> params;
     int param_idx = 1;
 
-    conditions.push_back("s.service_name = $" + std::to_string(param_idx++));
+    conditions.push_back("sr.service_name = $" + std::to_string(param_idx++));
     params.push_back(service_name);
 
     if (!fleet_id_filter.empty()) {
@@ -421,9 +456,7 @@ QueryResult<query::VehicleSummaryData> DiscoveryQuery::find_vehicles_with_servic
         conditions.push_back("e.region = $" + std::to_string(param_idx++));
         params.push_back(region_filter);
     }
-    if (available_only) {
-        conditions.push_back("s.status = 0");
-    }
+    // Note: available_only not applicable for hash-based protocol (no runtime status)
 
     std::string where_clause = "WHERE " + [&]() {
         std::string s;
@@ -436,9 +469,10 @@ QueryResult<query::VehicleSummaryData> DiscoveryQuery::find_vehicles_with_servic
 
     // Count
     std::string count_query = R"(
-        SELECT COUNT(DISTINCT s.vehicle_id)
-        FROM services s
-        JOIN vehicle_enrichment e ON s.vehicle_id = e.vehicle_id
+        SELECT COUNT(DISTINCT vs.vehicle_id)
+        FROM vehicle_schemas vs
+        JOIN schema_registry sr ON vs.schema_hash = sr.schema_hash
+        JOIN vehicle_enrichment e ON vs.vehicle_id = e.vehicle_id
     )" + where_clause;
 
     auto count_result = db_->execute(count_query, params);
@@ -453,13 +487,21 @@ QueryResult<query::VehicleSummaryData> DiscoveryQuery::find_vehicles_with_servic
             e.fleet_id,
             e.region,
             e.model,
-            e.year
+            e.year,
+            v.is_online
         FROM vehicle_enrichment e
-        JOIN services s ON e.vehicle_id = s.vehicle_id
+        JOIN vehicle_schemas vs ON e.vehicle_id = vs.vehicle_id
+        JOIN schema_registry sr ON vs.schema_hash = sr.schema_hash
+        LEFT JOIN vehicles v ON e.vehicle_id = v.vehicle_id
     )" + where_clause + R"(
         ORDER BY e.vehicle_id
-        LIMIT $)" + std::to_string(param_idx++) + R"(
-        OFFSET $)" + std::to_string(param_idx++);
+    )";
+
+    // Add LIMIT and OFFSET with explicit parameter order
+    int limit_idx = param_idx++;
+    int offset_idx = param_idx++;
+    query += " LIMIT $" + std::to_string(limit_idx);
+    query += " OFFSET $" + std::to_string(offset_idx);
 
     params.push_back(std::to_string(page_size));
     params.push_back(std::to_string(offset));
@@ -472,7 +514,8 @@ QueryResult<query::VehicleSummaryData> DiscoveryQuery::find_vehicles_with_servic
         vs.fleet_id = row.get_string("fleet_id");
         vs.region = row.get_string("region");
         vs.model = row.get_string("model");
-        vs.year = row.get_int("year");
+        vs.year = row.is_null("year") ? 0 : row.get_int("year");
+        vs.is_online = row.get_string("is_online") == "t";
         result.items.push_back(std::move(vs));
     }
 
@@ -501,7 +544,9 @@ std::optional<DiscoveryQuery::SyncState> DiscoveryQuery::get_sync_state(
     SyncState state;
     auto row = result.row(0);
     state.discovery_sequence = row.get_int64("discovery_sequence");
-    state.state_checksum = static_cast<uint32_t>(row.get_int("discovery_checksum"));
+    // discovery_checksum is BIGINT to store uint32 values > INT_MAX
+    state.state_checksum = row.is_null("discovery_checksum") ? 0 :
+        static_cast<uint32_t>(row.get_int64("discovery_checksum"));
     return state;
 }
 
