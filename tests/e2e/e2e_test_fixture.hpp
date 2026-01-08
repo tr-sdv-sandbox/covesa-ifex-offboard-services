@@ -43,15 +43,27 @@ namespace ifex::offboard::test {
  */
 class E2ETestInfrastructure {
 public:
-    // Configuration
+    // Configuration - ISOLATED from simulation infrastructure
+    // Uses different ports/network to avoid conflicts with ./deploy/start-simulation.sh
     static constexpr const char* VEHICLE_IMAGE = "ifex-vehicle:latest";
     static constexpr const char* VEHICLE_CONTAINER_NAME = "e2e-test-vehicle";
     static constexpr const char* VEHICLE_ID = "E2E_TEST_VIN_001";
+
+    // E2E test network (isolated from ifex-simulation)
+    static constexpr const char* DOCKER_NETWORK = "e2e-test-network";
+
+    // E2E ports (offset from standard to avoid conflicts)
     static constexpr const char* MQTT_HOST = "localhost";
-    static constexpr int MQTT_PORT = 1883;
-    static constexpr const char* KAFKA_BROKER = "localhost:9092";
+    static constexpr int MQTT_PORT = 11883;              // Standard: 1883
+    static constexpr const char* MQTT_HOST_DOCKER = "e2e-mosquitto";  // For containers
+
+    static constexpr const char* KAFKA_BROKER = "localhost:19092";    // Standard: 9092
+    static constexpr const char* KAFKA_BROKER_DOCKER = "e2e-kafka:29092";  // For containers
+
     static constexpr const char* POSTGRES_HOST = "localhost";
-    static constexpr int POSTGRES_PORT = 5432;
+    static constexpr int POSTGRES_PORT = 15432;          // Standard: 5432
+    static constexpr const char* POSTGRES_HOST_DOCKER = "e2e-postgres";  // For containers
+
     static constexpr const char* POSTGRES_DB = "ifex_offboard";
     static constexpr const char* POSTGRES_USER = "ifex";
     static constexpr const char* POSTGRES_PASSWORD = "ifex_dev";
@@ -124,6 +136,7 @@ public:
     static void ResetDatabase(PostgresClient* db = nullptr);
 
 private:
+    static bool StartDockerInfrastructure();
     static bool StartBridgeServices();
     static void StopBridgeServices();
     static bool StartVehicleContainer();

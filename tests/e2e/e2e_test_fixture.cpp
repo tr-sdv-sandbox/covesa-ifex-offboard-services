@@ -78,8 +78,71 @@ std::string E2ETestInfrastructure::GetBinaryPath(const std::string& name) {
     return GetExecutableDir() + "/../" + name;
 }
 
+bool E2ETestInfrastructure::StartDockerInfrastructure() {
+    LOG(INFO) << "Starting E2E Docker infrastructure...";
+
+    // Check if e2e-postgres is already running
+    int ret = system("docker ps --format '{{.Names}}' | grep -q '^e2e-postgres$'");
+    if (ret == 0) {
+        LOG(INFO) << "  E2E Docker infrastructure already running";
+        return true;
+    }
+
+    // Start the E2E Docker compose stack
+    // Find the docker-compose.e2e.yml relative to test executable
+    std::string test_dir = GetExecutableDir();
+    // test_dir is like build/tests/e2e, we need source tests/e2e
+    std::string compose_file = test_dir + "/../../tests/e2e/docker-compose.e2e.yml";
+
+    // Try alternative paths
+    if (system(("test -f " + compose_file).c_str()) != 0) {
+        compose_file = "tests/e2e/docker-compose.e2e.yml";
+    }
+    if (system(("test -f " + compose_file).c_str()) != 0) {
+        // Try from build directory
+        compose_file = "../tests/e2e/docker-compose.e2e.yml";
+    }
+
+    // Try docker compose (v2) first, fall back to docker-compose (v1)
+    std::string cmd = "docker compose -f " + compose_file + " up -d 2>&1 || docker-compose -f " + compose_file + " up -d 2>&1";
+    LOG(INFO) << "  Running: " << cmd;
+
+    FILE* pipe = popen(cmd.c_str(), "r");
+    if (!pipe) {
+        LOG(ERROR) << "Failed to start E2E Docker infrastructure";
+        return false;
+    }
+
+    char buffer[256];
+    std::string output;
+    while (fgets(buffer, sizeof(buffer), pipe)) {
+        output += buffer;
+    }
+    int status = pclose(pipe);
+
+    if (status != 0) {
+        LOG(ERROR) << "docker compose up failed: " << output;
+        return false;
+    }
+
+    LOG(INFO) << "  E2E Docker infrastructure started";
+
+    // Wait for services to be healthy
+    LOG(INFO) << "  Waiting for services to be ready...";
+    std::this_thread::sleep_for(std::chrono::seconds(5));
+
+    return true;
+}
+
 bool E2ETestInfrastructure::VerifyDockerInfrastructure() {
     LOG(INFO) << "Verifying Docker infrastructure...";
+
+    // First, try to start E2E infrastructure if not running
+    if (!StartDockerInfrastructure()) {
+        LOG(ERROR) << "Failed to start E2E Docker infrastructure";
+        LOG(ERROR) << "Run: docker compose -f tests/e2e/docker-compose.e2e.yml up -d";
+        return false;
+    }
 
     // Check PostgreSQL
     PostgresConfig pg_config;
@@ -92,15 +155,17 @@ bool E2ETestInfrastructure::VerifyDockerInfrastructure() {
     db_ = std::make_unique<PostgresClient>(pg_config);
     if (!db_->is_connected()) {
         LOG(ERROR) << "PostgreSQL not available at " << POSTGRES_HOST << ":" << POSTGRES_PORT;
-        LOG(ERROR) << "Run: ./deploy/start-infra.sh";
+        LOG(ERROR) << "Run: docker compose -f tests/e2e/docker-compose.e2e.yml up -d";
         return false;
     }
-    LOG(INFO) << "  PostgreSQL: OK";
+    LOG(INFO) << "  PostgreSQL: OK (" << POSTGRES_HOST << ":" << POSTGRES_PORT << ")";
 
     // Check MQTT (try to connect briefly)
     // We'll verify this when starting the bridge
+    LOG(INFO) << "  MQTT endpoint: " << MQTT_HOST << ":" << MQTT_PORT;
 
     // Check Kafka (we'll verify when bridge starts)
+    LOG(INFO) << "  Kafka endpoint: " << KAFKA_BROKER;
 
     return true;
 }
@@ -122,22 +187,26 @@ bool E2ETestInfrastructure::VerifyVehicleImageExists() {
 }
 
 bool E2ETestInfrastructure::CreateKafkaTopics() {
-    LOG(INFO) << "Creating Kafka topics...";
+    LOG(INFO) << "Creating Kafka topics in E2E Kafka...";
 
     // Topics needed for bidirectional communication
+    // Use e2e-prefixed topics to avoid conflicts with simulation
     const std::vector<std::string> topics = {
-        "ifex.discovery.201",      // v2c: vehicle discovery sync
-        "ifex.scheduler.202",      // v2c: vehicle scheduler sync
-        "ifex.rpc.200",            // v2c: RPC responses
-        "ifex.status",             // v2c: vehicle status
-        "ifex.c2v.discovery",      // c2v: schema requests to vehicle
-        "ifex.c2v.scheduler",      // c2v: scheduler commands to vehicle
-        "ifex.c2v.rpc"             // c2v: RPC requests to vehicle
+        "e2e.discovery.201",       // v2c: vehicle discovery sync
+        "e2e.scheduler.202",       // v2c: vehicle scheduler sync
+        "e2e.rpc.200",             // v2c: RPC responses
+        "e2e.status",              // v2c: vehicle status
+        "e2e.c2v.discovery",       // c2v: schema requests to vehicle
+        "e2e.c2v.scheduler",       // c2v: scheduler commands to vehicle
+        "e2e.c2v.rpc"              // c2v: RPC requests to vehicle
     };
 
     for (const auto& topic : topics) {
-        std::string cmd = "docker exec ifex-kafka /opt/kafka/bin/kafka-topics.sh "
-                          "--bootstrap-server localhost:9092 "
+        // Use e2e-kafka container (from docker-compose.e2e.yml)
+        // apache/kafka image uses /opt/kafka/bin/kafka-topics.sh
+        // Internal port is 29092 (see KAFKA_ADVERTISED_LISTENERS)
+        std::string cmd = "docker exec e2e-kafka /opt/kafka/bin/kafka-topics.sh "
+                          "--bootstrap-server localhost:29092 "
                           "--create --if-not-exists "
                           "--topic " + topic + " "
                           "--partitions 1 "
@@ -146,23 +215,38 @@ bool E2ETestInfrastructure::CreateKafkaTopics() {
         system(cmd.c_str());
     }
 
-    LOG(INFO) << "  Created " << topics.size() << " Kafka topics";
+    LOG(INFO) << "  Created " << topics.size() << " Kafka topics (e2e.* prefix)";
     return true;
 }
 
 bool E2ETestInfrastructure::StartBridgeServices() {
-    LOG(INFO) << "Starting bridge services...";
+    LOG(INFO) << "Starting bridge services (E2E isolated)...";
 
     std::string bin_dir = GetBinaryPath("");
 
-    // Start mqtt_kafka_bridge
+    // Convert port to string for execl
+    std::string mqtt_port_str = std::to_string(MQTT_PORT);
+    std::string postgres_port_str = std::to_string(POSTGRES_PORT);
+
+    // Start mqtt_kafka_bridge with E2E-specific settings
+    // Use e2e.* topic names for isolation from simulation
     mqtt_kafka_bridge_pid_ = fork();
     if (mqtt_kafka_bridge_pid_ == 0) {
         std::string binary = bin_dir + "mqtt_kafka_bridge";
         execl(binary.c_str(), "mqtt_kafka_bridge",
               "--mqtt_host", MQTT_HOST,
+              "--mqtt_port", mqtt_port_str.c_str(),
               "--kafka_broker", KAFKA_BROKER,
               "--postgres_host", POSTGRES_HOST,
+              "--postgres_port", postgres_port_str.c_str(),
+              // E2E-specific Kafka topics
+              "--kafka_topic_rpc", "e2e.rpc.200",
+              "--kafka_topic_discovery", "e2e.discovery.201",
+              "--kafka_topic_scheduler", "e2e.scheduler.202",
+              "--kafka_topic_status", "e2e.status",
+              "--kafka_topic_c2v_rpc", "e2e.c2v.rpc",
+              "--kafka_topic_c2v_discovery", "e2e.c2v.discovery",
+              "--kafka_topic_c2v_scheduler", "e2e.c2v.scheduler",
               "--logtostderr",
               nullptr);
         LOG(ERROR) << "Failed to exec mqtt_kafka_bridge";
@@ -172,15 +256,20 @@ bool E2ETestInfrastructure::StartBridgeServices() {
         LOG(ERROR) << "Failed to fork mqtt_kafka_bridge";
         return false;
     }
-    LOG(INFO) << "  mqtt_kafka_bridge: PID " << mqtt_kafka_bridge_pid_;
+    LOG(INFO) << "  mqtt_kafka_bridge: PID " << mqtt_kafka_bridge_pid_
+              << " (MQTT=" << MQTT_HOST << ":" << MQTT_PORT
+              << ", Kafka=" << KAFKA_BROKER << ")";
 
-    // Start discovery_mirror
+    // Start discovery_mirror with E2E-specific settings
     discovery_mirror_pid_ = fork();
     if (discovery_mirror_pid_ == 0) {
         std::string binary = bin_dir + "discovery_mirror";
         execl(binary.c_str(), "discovery_mirror",
               "--kafka_broker", KAFKA_BROKER,
               "--postgres_host", POSTGRES_HOST,
+              "--postgres_port", postgres_port_str.c_str(),
+              "--kafka_topic", "e2e.discovery.201",
+              "--kafka_topic_c2v", "e2e.c2v.discovery",
               "--logtostderr",
               nullptr);
         LOG(ERROR) << "Failed to exec discovery_mirror";
@@ -192,13 +281,15 @@ bool E2ETestInfrastructure::StartBridgeServices() {
     }
     LOG(INFO) << "  discovery_mirror: PID " << discovery_mirror_pid_;
 
-    // Start scheduler_mirror
+    // Start scheduler_mirror with E2E-specific settings
     scheduler_mirror_pid_ = fork();
     if (scheduler_mirror_pid_ == 0) {
         std::string binary = bin_dir + "scheduler_mirror";
         execl(binary.c_str(), "scheduler_mirror",
               "--kafka_broker", KAFKA_BROKER,
               "--postgres_host", POSTGRES_HOST,
+              "--postgres_port", postgres_port_str.c_str(),
+              "--kafka_topic", "e2e.scheduler.202",
               "--logtostderr",
               nullptr);
         LOG(ERROR) << "Failed to exec scheduler_mirror";
@@ -241,25 +332,24 @@ void E2ETestInfrastructure::StopBridgeServices() {
 }
 
 bool E2ETestInfrastructure::StartVehicleContainer() {
-    LOG(INFO) << "Starting vehicle container...";
+    LOG(INFO) << "Starting vehicle container (E2E isolated)...";
 
     // Stop any existing container with same name
     system(("docker rm -f " + std::string(VEHICLE_CONTAINER_NAME) + " >/dev/null 2>&1").c_str());
 
-    // Create the simulation network if it doesn't exist
-    system("docker network create ifex-simulation 2>/dev/null || true");
+    // E2E network should already exist from docker-compose.e2e.yml
+    // No need to create it manually
 
-    // Connect mosquitto to the simulation network so vehicle can reach it by name
-    system("docker network connect ifex-simulation ifex-mosquitto 2>/dev/null || true");
-
-    // Start vehicle container on bridge network (not --network host)
-    // This allows multiple vehicles to run simultaneously, each with their own ports
+    // Start vehicle container on E2E test network
+    // Vehicle connects to e2e-mosquitto (internal Docker DNS)
+    // MQTT port inside container is always 1883 (e2e-mosquitto exposes 1883 internally)
     std::string cmd = "docker run -d"
                       " --name " + std::string(VEHICLE_CONTAINER_NAME) +
-                      " --network ifex-simulation"
+                      " --network " + std::string(DOCKER_NETWORK) +
                       " -e VEHICLE_ID=" + std::string(VEHICLE_ID) +
-                      " -e MQTT_HOST=ifex-mosquitto"
-                      " -e MQTT_PORT=" + std::to_string(MQTT_PORT) +
+                      " -e MQTT_HOST=" + std::string(MQTT_HOST_DOCKER) +
+                      " -e MQTT_PORT=1883"  // Internal port in e2e-mosquitto
+                      " -e KAFKA_BROKER=" + std::string(KAFKA_BROKER_DOCKER) +
                       " -e START_TEST_SERVICES=true"
                       " " + std::string(VEHICLE_IMAGE);
 
@@ -271,7 +361,9 @@ bool E2ETestInfrastructure::StartVehicleContainer() {
         return false;
     }
 
-    LOG(INFO) << "  Vehicle container started: " << VEHICLE_CONTAINER_NAME;
+    LOG(INFO) << "  Vehicle container started: " << VEHICLE_CONTAINER_NAME
+              << " (network=" << DOCKER_NETWORK
+              << ", mqtt=" << MQTT_HOST_DOCKER << ":1883)";
     return true;
 }
 
