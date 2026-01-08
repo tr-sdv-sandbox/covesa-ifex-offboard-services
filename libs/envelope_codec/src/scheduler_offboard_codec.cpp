@@ -7,9 +7,9 @@ namespace ifex::offboard {
 
 namespace {
 
-uint64_t now_ns() {
+uint64_t now_ms() {
     auto now = std::chrono::system_clock::now();
-    return std::chrono::duration_cast<std::chrono::nanoseconds>(
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
         now.time_since_epoch()).count();
 }
 
@@ -41,7 +41,7 @@ std::string encode_scheduler_offboard(
     meta->set_vehicle_id(vehicle_id);
     meta->set_fleet_id(fleet_id);
     meta->set_region(region);
-    meta->set_received_at_ns(now_ns());
+    meta->set_received_at_ms(now_ms());
     meta->set_bridge_id(bridge_id);
 
     // Copy the original sync message
@@ -90,9 +90,9 @@ scheduler::job_record_t create_job_record(
     record.set_region(region);
 
     // Timestamps
-    auto ts = now_ns();
-    record.set_first_seen_ns(ts);
-    record.set_last_updated_ns(ts);
+    auto ts = now_ms();
+    record.set_first_seen_ms(ts);
+    record.set_last_updated_ms(ts);
 
     return record;
 }
@@ -124,7 +124,7 @@ scheduler::execution_record_t create_execution_record(
     record.set_region(region);
 
     // Timestamps
-    record.set_received_at_ns(now_ns());
+    record.set_received_at_ms(now_ms());
 
     return record;
 }

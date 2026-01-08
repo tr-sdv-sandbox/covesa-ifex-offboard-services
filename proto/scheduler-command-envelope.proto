@@ -64,7 +64,7 @@ message job_update_t {
 // Scheduler command envelope (sent from cloud to vehicle)
 message scheduler_command_t {
   string command_id = 1;
-  uint64 timestamp_ns = 2;
+  uint64 timestamp_ms = 2;
   string requester_id = 3;
   command_type_t type = 4;
   job_definition_t create_job = 5;
@@ -81,7 +81,7 @@ message scheduler_command_ack_t {
   bool success = 2;
   string error_message = 3;
   string job_id = 4;
-  uint64 timestamp_ns = 5;
+  uint64 timestamp_ms = 5;
 }
 
 

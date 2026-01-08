@@ -7,9 +7,9 @@ namespace ifex::offboard {
 
 namespace {
 
-uint64_t now_ns() {
+uint64_t now_ms() {
     auto now = std::chrono::system_clock::now();
-    return std::chrono::duration_cast<std::chrono::nanoseconds>(
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
         now.time_since_epoch()).count();
 }
 
@@ -44,7 +44,7 @@ std::string encode_rpc_response_offboard(
     meta->set_vehicle_id(vehicle_id);
     meta->set_fleet_id(fleet_id);
     meta->set_region(region);
-    meta->set_received_at_ns(now_ns());
+    meta->set_received_at_ms(now_ms());
     meta->set_bridge_id(bridge_id);
 
     // Set direction
@@ -61,7 +61,7 @@ std::string encode_rpc_request_offboard(
     const swdv::dispatcher_rpc_envelope::rpc_request_t& request,
     const std::string& request_id,
     const std::string& requester_id,
-    uint64_t timeout_at_ns,
+    uint64_t timeout_at_ms,
     const std::string& fleet_id,
     const std::string& region,
     const std::string& bridge_id) {
@@ -73,7 +73,7 @@ std::string encode_rpc_request_offboard(
     meta->set_vehicle_id(vehicle_id);
     meta->set_fleet_id(fleet_id);
     meta->set_region(region);
-    meta->set_received_at_ns(now_ns());
+    meta->set_received_at_ms(now_ms());
     meta->set_bridge_id(bridge_id);
 
     // Set direction
@@ -117,8 +117,8 @@ rpc::rpc_record_t create_rpc_record_from_request(
     record.set_parameters_json(request.parameters_json());
     record.set_timeout_ms(request.timeout_ms());
 
-    // Timing
-    record.set_request_timestamp_ns(request.request_timestamp_ns());
+    // Timing - convert from ms (vehicle proto) to ns (offboard record)
+    record.set_request_timestamp_ms(request.request_timestamp_ms() * 1000000);
 
     // Enrichment
     record.set_fleet_id(fleet_id);
@@ -138,14 +138,14 @@ void update_rpc_record_with_response(
     record.set_error_message(response.error_message());
 
     // Timing
-    uint64_t response_ts = now_ns();
-    record.set_response_timestamp_ns(response_ts);
+    uint64_t response_ts = now_ms();
+    record.set_response_timestamp_ms(response_ts);
 
-    if (record.request_timestamp_ns() > 0) {
+    if (record.request_timestamp_ms() > 0) {
         // Convert request timestamp from vehicle ns to compare
         // Note: This assumes reasonable clock sync; in production
-        // you'd use the offboard received_at_ns instead
-        record.set_round_trip_ns(response_ts - record.request_timestamp_ns());
+        // you'd use the offboard received_at_ms instead
+        record.set_round_trip_ms(response_ts - record.request_timestamp_ms());
     }
 }
 

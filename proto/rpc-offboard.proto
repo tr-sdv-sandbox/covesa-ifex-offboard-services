@@ -17,8 +17,8 @@ message offboard_metadata_t {
     string customer_id = 4;
 
     // Offboard timestamps
-    uint64 received_at_ns = 10;
-    uint64 processed_at_ns = 11;
+    uint64 received_at_ms = 10;
+    uint64 processed_at_ms = 11;
 
     // Ingestion metadata
     string bridge_id = 20;
@@ -48,7 +48,7 @@ message rpc_request_offboard_t {
     // Cloud-side tracking
     string request_id = 10;        // Cloud-generated unique ID
     string requester_id = 11;      // Who initiated the request
-    uint64 timeout_at_ns = 12;     // When to consider timed out
+    uint64 timeout_at_ms = 12;     // When to consider timed out
 }
 
 // Offboard RPC response (vehicle -> cloud)
@@ -64,7 +64,7 @@ message rpc_response_offboard_t {
 
     // Cloud-side tracking
     string request_id = 10;        // Matched from correlation_id
-    uint64 round_trip_ns = 11;     // Time from request to response
+    uint64 round_trip_ms = 11;     // Time from request to response
 }
 
 // Unified RPC message (can be request or response)
@@ -83,7 +83,7 @@ message rpc_offboard_t {
 
     // Cloud-side tracking
     string request_id = 20;
-    uint64 round_trip_ns = 21;
+    uint64 round_trip_ms = 21;
 }
 
 // Flattened RPC record for PostgreSQL/analytics
@@ -105,9 +105,9 @@ message rpc_record_t {
     string error_message = 22;
 
     // Timing
-    uint64 request_timestamp_ns = 30;
-    uint64 response_timestamp_ns = 31;
-    uint64 round_trip_ns = 32;
+    uint64 request_timestamp_ms = 30;
+    uint64 response_timestamp_ms = 31;
+    uint64 round_trip_ms = 32;
 
     // Enrichment
     string fleet_id = 40;

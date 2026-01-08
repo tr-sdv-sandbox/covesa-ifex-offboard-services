@@ -28,7 +28,7 @@ message rpc_request_t {
   string method_name = 3;
   string parameters_json = 4;
   uint32 timeout_ms = 5;
-  sint64 request_timestamp_ns = 6;
+  sint64 request_timestamp_ms = 6;
 }
 
 // Response from vehicle to cloud
@@ -39,7 +39,7 @@ message rpc_response_t {
   string error_message = 4;
   uint32 duration_ms = 5;
   string service_endpoint = 6;
-  sint64 response_timestamp_ns = 7;
+  sint64 response_timestamp_ms = 7;
 }
 
 

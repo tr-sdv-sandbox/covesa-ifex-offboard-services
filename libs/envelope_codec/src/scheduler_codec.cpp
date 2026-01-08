@@ -71,4 +71,13 @@ const char* scheduler_event_type_name(
     }
 }
 
+std::optional<swdv::scheduler_command_envelope::scheduler_command_ack_t>
+decode_scheduler_command_ack(const std::string& payload) {
+    swdv::scheduler_command_envelope::scheduler_command_ack_t ack;
+    if (!ack.ParseFromString(payload)) {
+        return std::nullopt;
+    }
+    return ack;
+}
+
 }  // namespace ifex::offboard

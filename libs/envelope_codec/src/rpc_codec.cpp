@@ -54,9 +54,9 @@ swdv::dispatcher_rpc_envelope::rpc_request_t create_rpc_request(
     req.set_timeout_ms(timeout_ms);
 
     auto now = std::chrono::system_clock::now();
-    auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
         now.time_since_epoch()).count();
-    req.set_request_timestamp_ns(ns);
+    req.set_request_timestamp_ms(ms);
 
     return req;
 }

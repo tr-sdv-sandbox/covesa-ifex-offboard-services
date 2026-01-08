@@ -77,8 +77,8 @@ message GetRpcStatusResponse {
     string error_message = 7;
     uint32 duration_ms = 8;
     bool completed = 9;
-    uint64 created_at_ns = 10;
-    uint64 responded_at_ns = 11;
+    uint64 created_at_ms = 10;
+    uint64 responded_at_ms = 11;
     string requester_id = 12;
 }
 
@@ -90,7 +90,7 @@ message ListRpcRequestsRequest {
     string requester_id_filter = 3;    // Optional
     bool pending_only = 4;             // Only in-flight requests
     bool failed_only = 5;              // Only failed requests
-    uint64 since_ns = 6;               // Only requests after this timestamp
+    uint64 since_ms = 6;               // Only requests after this timestamp
     int32 page_size = 10;
     string page_token = 11;
 }
@@ -102,8 +102,8 @@ message RpcRequestSummary {
     string method_name = 4;
     CloudRpcStatus status = 5;
     bool completed = 6;
-    uint64 created_at_ns = 7;
-    uint64 responded_at_ns = 8;
+    uint64 created_at_ms = 7;
+    uint64 responded_at_ms = 8;
     uint32 duration_ms = 9;
     string requester_id = 10;
 }

@@ -17,8 +17,8 @@ message offboard_metadata_t {
     string customer_id = 4;
 
     // Offboard timestamps
-    uint64 received_at_ns = 10;
-    uint64 processed_at_ns = 11;
+    uint64 received_at_ms = 10;
+    uint64 processed_at_ms = 11;
 
     // Ingestion metadata
     string bridge_id = 20;
@@ -64,8 +64,8 @@ message job_record_t {
     string region = 31;
 
     // Offboard tracking
-    uint64 first_seen_ns = 40;
-    uint64 last_updated_ns = 41;
+    uint64 first_seen_ms = 40;
+    uint64 last_updated_ms = 41;
     uint64 sequence_number = 42;
 }
 
@@ -91,6 +91,6 @@ message execution_record_t {
     string region = 31;
 
     // Offboard tracking
-    uint64 received_at_ns = 40;
+    uint64 received_at_ms = 40;
     uint64 sequence_number = 41;
 }

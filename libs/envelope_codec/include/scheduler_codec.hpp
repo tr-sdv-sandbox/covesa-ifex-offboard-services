@@ -4,6 +4,7 @@
 #include <string>
 
 #include "scheduler-sync-envelope.pb.h"
+#include "scheduler-command-envelope.pb.h"
 
 namespace ifex::offboard {
 
@@ -28,5 +29,9 @@ std::string job_info_to_string(
 /// Helper to get event type name
 const char* scheduler_event_type_name(
     swdv::scheduler_sync_envelope::sync_event_type_t type);
+
+/// Decode scheduler command ack from binary payload
+std::optional<swdv::scheduler_command_envelope::scheduler_command_ack_t>
+decode_scheduler_command_ack(const std::string& payload);
 
 }  // namespace ifex::offboard

@@ -73,7 +73,7 @@ message execution_result_t {
 message sync_event_t {
   sync_event_type_t event_type = 1;
   uint64 sequence_number = 2;
-  uint64 timestamp_ns = 3;
+  uint64 timestamp_ms = 3;
   string job_id = 4;
   job_info_t job_info = 5;
   execution_result_t execution_result = 6;
