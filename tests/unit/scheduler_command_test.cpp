@@ -41,7 +41,7 @@ protected:
 TEST_F(SchedulerCommandTest, CreateJobCommand) {
     cmd::scheduler_command_t command;
     command.set_command_id("cmd-123");
-    command.set_timestamp_ns(1234567890123456789ULL);
+    command.set_timestamp_ms(1234567890123456789ULL);
     command.set_requester_id("cloud-scheduler");
     command.set_type(cmd::COMMAND_CREATE_JOB);
 
@@ -59,7 +59,7 @@ TEST_F(SchedulerCommandTest, CreateJobCommand) {
     auto result = RoundTrip(command);
 
     EXPECT_EQ(result.command_id(), "cmd-123");
-    EXPECT_EQ(result.timestamp_ns(), 1234567890123456789ULL);
+    EXPECT_EQ(result.timestamp_ms(), 1234567890123456789ULL);
     EXPECT_EQ(result.requester_id(), "cloud-scheduler");
     EXPECT_EQ(result.type(), cmd::COMMAND_CREATE_JOB);
 
@@ -149,7 +149,7 @@ TEST_F(SchedulerCommandTest, DeleteJobCommand) {
 TEST_F(SchedulerCommandTest, PauseJobCommand) {
     cmd::scheduler_command_t command;
     command.set_command_id("cmd-pause");
-    command.set_timestamp_ns(9999999999ULL);
+    command.set_timestamp_ms(9999999999ULL);
     command.set_requester_id("fleet-manager");
     command.set_type(cmd::COMMAND_PAUSE_JOB);
     command.set_pause_job_id("job-to-pause");
@@ -157,7 +157,7 @@ TEST_F(SchedulerCommandTest, PauseJobCommand) {
     auto result = RoundTrip(command);
 
     EXPECT_EQ(result.command_id(), "cmd-pause");
-    EXPECT_EQ(result.timestamp_ns(), 9999999999ULL);
+    EXPECT_EQ(result.timestamp_ms(), 9999999999ULL);
     EXPECT_EQ(result.requester_id(), "fleet-manager");
     EXPECT_EQ(result.type(), cmd::COMMAND_PAUSE_JOB);
     EXPECT_EQ(result.pause_job_id(), "job-to-pause");
@@ -175,7 +175,7 @@ TEST_F(SchedulerCommandTest, PauseJobCommandType) {
 TEST_F(SchedulerCommandTest, ResumeJobCommand) {
     cmd::scheduler_command_t command;
     command.set_command_id("cmd-resume");
-    command.set_timestamp_ns(8888888888ULL);
+    command.set_timestamp_ms(8888888888ULL);
     command.set_requester_id("fleet-manager");
     command.set_type(cmd::COMMAND_RESUME_JOB);
     command.set_resume_job_id("job-to-resume");
@@ -183,7 +183,7 @@ TEST_F(SchedulerCommandTest, ResumeJobCommand) {
     auto result = RoundTrip(command);
 
     EXPECT_EQ(result.command_id(), "cmd-resume");
-    EXPECT_EQ(result.timestamp_ns(), 8888888888ULL);
+    EXPECT_EQ(result.timestamp_ms(), 8888888888ULL);
     EXPECT_EQ(result.requester_id(), "fleet-manager");
     EXPECT_EQ(result.type(), cmd::COMMAND_RESUME_JOB);
     EXPECT_EQ(result.resume_job_id(), "job-to-resume");
@@ -201,7 +201,7 @@ TEST_F(SchedulerCommandTest, ResumeJobCommandType) {
 TEST_F(SchedulerCommandTest, TriggerJobCommand) {
     cmd::scheduler_command_t command;
     command.set_command_id("cmd-trigger");
-    command.set_timestamp_ns(7777777777ULL);
+    command.set_timestamp_ms(7777777777ULL);
     command.set_requester_id("emergency-override");
     command.set_type(cmd::COMMAND_TRIGGER_JOB);
     command.set_trigger_job_id("job-to-trigger-now");
@@ -209,7 +209,7 @@ TEST_F(SchedulerCommandTest, TriggerJobCommand) {
     auto result = RoundTrip(command);
 
     EXPECT_EQ(result.command_id(), "cmd-trigger");
-    EXPECT_EQ(result.timestamp_ns(), 7777777777ULL);
+    EXPECT_EQ(result.timestamp_ms(), 7777777777ULL);
     EXPECT_EQ(result.requester_id(), "emergency-override");
     EXPECT_EQ(result.type(), cmd::COMMAND_TRIGGER_JOB);
     EXPECT_EQ(result.trigger_job_id(), "job-to-trigger-now");
@@ -244,7 +244,7 @@ TEST_F(SchedulerCommandTest, CommandAckSuccess) {
     ack.set_command_id("cmd-123");
     ack.set_success(true);
     ack.set_job_id("job-456");
-    ack.set_timestamp_ns(1234567890ULL);
+    ack.set_timestamp_ms(1234567890ULL);
 
     std::string serialized = ack.SerializeAsString();
     cmd::scheduler_command_ack_t result;
@@ -253,7 +253,7 @@ TEST_F(SchedulerCommandTest, CommandAckSuccess) {
     EXPECT_EQ(result.command_id(), "cmd-123");
     EXPECT_TRUE(result.success());
     EXPECT_EQ(result.job_id(), "job-456");
-    EXPECT_EQ(result.timestamp_ns(), 1234567890ULL);
+    EXPECT_EQ(result.timestamp_ms(), 1234567890ULL);
     EXPECT_TRUE(result.error_message().empty());
 }
 

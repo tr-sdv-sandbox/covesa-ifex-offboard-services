@@ -5,10 +5,7 @@
  * These tests verify the complete flow:
  *   MQTT (v2c/{vehicle_id}/is_online) → mqtt_kafka_bridge → PostgreSQL
  *
- * Prerequisites:
- *   - Docker containers running (Mosquitto, PostgreSQL, Kafka)
- *   - mqtt_kafka_bridge running with PostgreSQL connection
- *   - Run via: ./deploy/start-infra.sh && ctest -R status_e2e
+ * Uses shared E2E infrastructure (mqtt_kafka_bridge started automatically).
  */
 
 #include <gtest/gtest.h>
@@ -22,6 +19,7 @@
 
 #include <mosquitto.h>
 #include "postgres_client.hpp"
+#include "e2e_test_fixture.hpp"
 
 using namespace std::chrono_literals;
 using namespace ifex::offboard;
@@ -29,15 +27,24 @@ using namespace ifex::offboard;
 /**
  * @brief Test fixture for Status E2E tests
  *
- * Assumes infrastructure is already running via deploy scripts.
- * Tests can be run with:
- *   ./deploy/start-infra.sh          # Start infrastructure
- *   ctest -R status_e2e              # Run these tests
+ * Uses shared E2E infrastructure that manages mqtt_kafka_bridge lifecycle.
  */
 class StatusE2ETest : public ::testing::Test {
 protected:
     static constexpr const char* MQTT_HOST = "localhost";
     static constexpr int MQTT_PORT = 1883;
+
+    static void SetUpTestSuite() {
+        // Start shared E2E infrastructure (includes mqtt_kafka_bridge)
+        if (!test::E2ETestInfrastructure::IsRunning()) {
+            ASSERT_TRUE(test::E2ETestInfrastructure::StartInfrastructure(false))  // false = don't need vehicle
+                << "Failed to start E2E infrastructure";
+        }
+    }
+
+    static void TearDownTestSuite() {
+        // Infrastructure cleanup handled by process exit via atexit handler
+    }
 
     void SetUp() override {
         // Initialize glog for tests
@@ -58,34 +65,24 @@ protected:
         // Generate unique vehicle ID for this test
         vehicle_id_ = "status-test-" + std::to_string(std::rand());
 
-        // Try to connect to PostgreSQL
+        // Connect to PostgreSQL (required)
         PostgresConfig pg_config;
         pg_config.host = "localhost";
         pg_config.database = "ifex_offboard";
         pg_config.user = "ifex";
         pg_config.password = "ifex_dev";
 
-        try {
-            db_ = std::make_unique<PostgresClient>(pg_config);
-            if (!db_->is_connected()) {
-                db_.reset();
-                LOG(WARNING) << "PostgreSQL not available";
-            }
-        } catch (const std::exception& e) {
-            LOG(WARNING) << "PostgreSQL connection failed: " << e.what();
-            db_.reset();
-        }
+        db_ = std::make_unique<PostgresClient>(pg_config);
+        ASSERT_TRUE(db_->is_connected())
+            << "PostgreSQL not available";
 
-        // Try to connect to MQTT
+        // Connect to MQTT (required)
         mosq_ = mosquitto_new("status-e2e-test", true, nullptr);
-        if (mosq_) {
-            int rc = mosquitto_connect(mosq_, MQTT_HOST, MQTT_PORT, 60);
-            if (rc != MOSQ_ERR_SUCCESS) {
-                LOG(WARNING) << "MQTT connection failed: " << mosquitto_strerror(rc);
-                mosquitto_destroy(mosq_);
-                mosq_ = nullptr;
-            }
-        }
+        ASSERT_NE(mosq_, nullptr) << "Failed to create MQTT client";
+
+        int rc = mosquitto_connect(mosq_, MQTT_HOST, MQTT_PORT, 60);
+        ASSERT_EQ(rc, MOSQ_ERR_SUCCESS)
+            << "MQTT connection failed: " << mosquitto_strerror(rc);
     }
 
     void TearDown() override {
@@ -104,16 +101,6 @@ protected:
             mosquitto_disconnect(mosq_);
             mosquitto_destroy(mosq_);
             mosq_ = nullptr;
-        }
-    }
-
-    // Skip test if infrastructure is not available
-    void RequireInfrastructure() {
-        if (!db_ || !db_->is_connected()) {
-            GTEST_SKIP() << "PostgreSQL not available. Run ./deploy/start-infra.sh first";
-        }
-        if (!mosq_) {
-            GTEST_SKIP() << "MQTT broker not available. Run ./deploy/start-infra.sh first";
         }
     }
 
@@ -187,7 +174,6 @@ TEST_F(StatusE2ETest, InfrastructureConnection) {
 // =============================================================================
 
 TEST_F(StatusE2ETest, PublishOnlineUpdatesDatabase) {
-    RequireInfrastructure();
 
     LOG(INFO) << "Testing: Publish is_online=1 → DB is_online=true";
     LOG(INFO) << "Vehicle ID: " << vehicle_id_;
@@ -207,7 +193,6 @@ TEST_F(StatusE2ETest, PublishOnlineUpdatesDatabase) {
 }
 
 TEST_F(StatusE2ETest, PublishOfflineUpdatesDatabase) {
-    RequireInfrastructure();
 
     LOG(INFO) << "Testing: Publish is_online=0 → DB is_online=false";
     LOG(INFO) << "Vehicle ID: " << vehicle_id_;
@@ -231,7 +216,6 @@ TEST_F(StatusE2ETest, PublishOfflineUpdatesDatabase) {
 }
 
 TEST_F(StatusE2ETest, StatusTransitions) {
-    RequireInfrastructure();
 
     LOG(INFO) << "Testing: Multiple status transitions";
     LOG(INFO) << "Vehicle ID: " << vehicle_id_;
@@ -258,7 +242,6 @@ TEST_F(StatusE2ETest, StatusTransitions) {
 }
 
 TEST_F(StatusE2ETest, LastSeenUpdated) {
-    RequireInfrastructure();
 
     LOG(INFO) << "Testing: last_seen_at updated on status change";
     LOG(INFO) << "Vehicle ID: " << vehicle_id_;
@@ -298,7 +281,6 @@ TEST_F(StatusE2ETest, LastSeenUpdated) {
 }
 
 TEST_F(StatusE2ETest, VehicleCreatedOnFirstStatus) {
-    RequireInfrastructure();
 
     LOG(INFO) << "Testing: Vehicle record created on first status message";
     LOG(INFO) << "Vehicle ID: " << vehicle_id_;
@@ -329,7 +311,6 @@ TEST_F(StatusE2ETest, VehicleCreatedOnFirstStatus) {
 // =============================================================================
 
 TEST_F(StatusE2ETest, InvalidPayloadIgnored) {
-    RequireInfrastructure();
 
     LOG(INFO) << "Testing: Invalid payload handling";
     LOG(INFO) << "Vehicle ID: " << vehicle_id_;
