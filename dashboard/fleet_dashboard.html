@@ -1511,27 +1511,27 @@
             document.getElementById('no-method-panel').style.display = 'none';
             document.getElementById('method-panel').style.display = 'block';
 
-            // Update header
-            document.getElementById('method-title').textContent = `${serviceName}.${methodName}`;
+            // Update header - include namespace if present
+            const namespace = selectedMethod.namespace || '';
+            const fullName = namespace ? `${serviceName}.${namespace}.${methodName}` : `${serviceName}.${methodName}`;
+            document.getElementById('method-title').textContent = fullName;
             document.getElementById('method-description').textContent = selectedMethod.description || '';
 
+            // All methods are schedulable in IFEX
             const schedulableBadge = document.getElementById('method-schedulable');
-            if (selectedMethod.is_schedulable) {
-                schedulableBadge.style.display = 'inline';
-                document.getElementById('btn-schedule').style.display = 'inline';
-            } else {
-                schedulableBadge.style.display = 'none';
-                document.getElementById('btn-schedule').style.display = 'none';
-            }
+            schedulableBadge.style.display = 'inline';
+            document.getElementById('btn-schedule').style.display = 'inline';
 
-            // Build dynamic form
-            buildDynamicForm(selectedMethod.input_parameters || []);
+            // Build dynamic form - use 'input' field from new JSONB format
+            // Falls back to 'input_parameters' for old format compatibility
+            const inputParams = selectedMethod.input || selectedMethod.input_parameters || [];
+            buildDynamicForm(inputParams);
         }
 
         function buildDynamicForm(parameters) {
             const container = document.getElementById('dynamic-form');
 
-            if (parameters.length === 0) {
+            if (!parameters || parameters.length === 0) {
                 container.innerHTML = '<p style="color: #666; font-size: 0.875rem;">No parameters required</p>';
                 return;
             }
@@ -1547,21 +1547,26 @@
             const name = param.name;
             const type = param.datatype || param.type || 'string';
             const fieldId = prefix ? `${prefix}.${name}` : name;
+            const description = param.description || '';
 
-            // Check if it's an enum
-            const enumDef = selectedSchema.enum_definitions?.[type];
-            if (enumDef) {
-                const options = enumDef.options || [];
-                // Check if array (ends with [])
-                if (type.endsWith('[]') || param.datatype?.includes('[]')) {
+            // Get enum and struct definitions from schema (handle both old and new field names)
+            const enumDefs = selectedSchema.enum_definitions || selectedSchema.enums || {};
+            const structDefs = selectedSchema.struct_definitions || {};
+
+            // Check if it's an enum (enum_definitions is object where key=typename, value=array of values)
+            const enumValues = enumDefs[type];
+            if (enumValues && Array.isArray(enumValues)) {
+                // New format: enum_definitions[type] = ["VALUE1", "VALUE2", ...]
+                const isArray = type.endsWith('[]') || param.datatype?.includes('[]');
+                if (isArray) {
                     return `
                         <div class="field-group">
-                            <label>${name} (${type})</label>
+                            <label>${name} (${type})${description ? ' - ' + description : ''}</label>
                             <div class="checkbox-group">
-                                ${options.map(o => `
+                                ${enumValues.map(v => `
                                     <label>
-                                        <input type="checkbox" name="${fieldId}" value="${o.name}">
-                                        ${o.name}
+                                        <input type="checkbox" name="${fieldId}" value="${v}">
+                                        ${v}
                                     </label>
                                 `).join('')}
                             </div>
@@ -1570,33 +1575,33 @@
                 } else {
                     return `
                         <div class="field-group">
-                            <label>${name}</label>
+                            <label>${name}${description ? ' - ' + description : ''}</label>
                             <select id="param-${fieldId}">
-                                ${options.map(o => `<option value="${o.name}">${o.name}</option>`).join('')}
+                                ${enumValues.map(v => `<option value="${v}">${v}</option>`).join('')}
                             </select>
                         </div>
                     `;
                 }
             }
 
-            // Check if it's a struct
-            const structDef = selectedSchema.struct_definitions?.[type];
-            if (structDef) {
-                const members = structDef.members || [];
+            // Check if it's a struct (struct_definitions[type] = [{name, datatype}, ...])
+            const structMembers = structDefs[type];
+            if (structMembers && Array.isArray(structMembers)) {
                 return `
                     <div class="field-group struct">
-                        <label>${name} (${type})</label>
-                        ${members.map(m => renderParameter(m, fieldId)).join('')}
+                        <label>${name} (${type})${description ? ' - ' + description : ''}</label>
+                        ${structMembers.map(m => renderParameter(m, fieldId)).join('')}
                     </div>
                 `;
             }
 
             // Basic types
             const inputType = getInputType(type);
+            const placeholder = description || '';
             return `
                 <div class="field-group">
-                    <label>${name} (${type})</label>
-                    <input type="${inputType}" id="param-${fieldId}" ${inputType === 'number' ? 'step="any"' : ''}>
+                    <label>${name} (${type})${description ? ' - ' + description : ''}</label>
+                    <input type="${inputType}" id="param-${fieldId}" ${inputType === 'number' ? 'step="any"' : ''} placeholder="${placeholder}">
                 </div>
             `;
         }

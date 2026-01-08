@@ -99,12 +99,12 @@ def get_stats():
     cur.execute("SELECT COUNT(*) as count FROM vehicle_enrichment")
     stats['total_vehicles'] = cur.fetchone()['count']
 
-    # Vehicles with registered services
-    cur.execute("SELECT COUNT(DISTINCT vehicle_id) as count FROM services")
+    # Vehicles with registered services (using vehicle_schemas)
+    cur.execute("SELECT COUNT(DISTINCT vehicle_id) as count FROM vehicle_schemas")
     stats['active_vehicles'] = cur.fetchone()['count']
 
-    # Total services
-    cur.execute("SELECT COUNT(*) as count FROM services")
+    # Total unique services (from schema_registry)
+    cur.execute("SELECT COUNT(*) as count FROM schema_registry")
     stats['total_services'] = cur.fetchone()['count']
 
     # Total jobs
@@ -152,7 +152,7 @@ def get_vehicles():
     region_filter = request.args.get('region')
     search = request.args.get('search')
 
-    # Build query
+    # Build query (using vehicle_schemas for service count)
     query = """
         SELECT
             e.vehicle_id,
@@ -163,12 +163,14 @@ def get_vehicles():
             e.owner,
             e.created_at,
             e.updated_at,
+            v.is_online,
             COALESCE(s.service_count, 0) as service_count,
             COALESCE(j.job_count, 0) as job_count
         FROM vehicle_enrichment e
+        LEFT JOIN vehicles v ON e.vehicle_id = v.vehicle_id
         LEFT JOIN (
             SELECT vehicle_id, COUNT(*) as service_count
-            FROM services
+            FROM vehicle_schemas
             GROUP BY vehicle_id
         ) s ON e.vehicle_id = s.vehicle_id
         LEFT JOIN (
@@ -233,10 +235,10 @@ def get_vehicle(vehicle_id):
         conn.close()
         return jsonify({'error': 'Vehicle not found'}), 404
 
-    # Get services
+    # Get services (using vehicle_services_view)
     cur.execute("""
-        SELECT service_name, version, status, endpoint_address, updated_at
-        FROM services
+        SELECT service_name, version, schema_hash, methods, last_seen_at
+        FROM vehicle_services_view
         WHERE vehicle_id = %s
         ORDER BY service_name
     """, (vehicle_id,))
@@ -275,19 +277,20 @@ def get_vehicle(vehicle_id):
 
 @app.route('/api/services')
 def get_services():
-    """Get all services across fleet"""
+    """Get all services across fleet (using schema_registry)"""
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
-    # Group by service name
+    # Get unique services from schema_registry with vehicle counts
     cur.execute("""
         SELECT
-            service_name,
-            COUNT(DISTINCT vehicle_id) as vehicle_count,
-            COUNT(*) as instance_count
-        FROM services
-        GROUP BY service_name
-        ORDER BY vehicle_count DESC
+            sr.service_name,
+            sr.version,
+            sr.schema_hash,
+            sr.schema_count as vehicle_count,
+            sr.methods
+        FROM schema_registry sr
+        ORDER BY sr.schema_count DESC, sr.service_name
     """)
     services = cur.fetchall()
 
@@ -299,7 +302,7 @@ def get_services():
 
 @app.route('/api/fleets')
 def get_fleets():
-    """Get fleet summary"""
+    """Get fleet summary (using vehicle_schemas)"""
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
@@ -308,11 +311,13 @@ def get_fleets():
             e.fleet_id,
             e.region,
             COUNT(DISTINCT e.vehicle_id) as vehicle_count,
-            COALESCE(SUM(s.service_count), 0) as total_services
+            COALESCE(SUM(s.service_count), 0) as total_services,
+            SUM(CASE WHEN v.is_online THEN 1 ELSE 0 END) as online_count
         FROM vehicle_enrichment e
+        LEFT JOIN vehicles v ON e.vehicle_id = v.vehicle_id
         LEFT JOIN (
             SELECT vehicle_id, COUNT(*) as service_count
-            FROM services
+            FROM vehicle_schemas
             GROUP BY vehicle_id
         ) s ON e.vehicle_id = s.vehicle_id
         GROUP BY e.fleet_id, e.region
@@ -350,16 +355,19 @@ def get_regions():
 @app.route('/api/rpc', methods=['POST'])
 def dispatch_rpc():
     """
-    Dispatch an RPC call to a vehicle
+    Dispatch an RPC call to a vehicle via MQTT
 
     Request body:
     {
         "vehicle_id": "VIN00000000000001",
-        "service_name": "climate_service",
-        "method_name": "set_temperature",
-        "parameters": {"zone": "driver", "temperature": 22.0},
+        "service_name": "echo_service",
+        "method_name": "echo",
+        "parameters": {"message": "Hello"},
         "timeout_ms": 5000
     }
+
+    Note: RPCs are fire-and-forget from dashboard perspective.
+    Response tracking is handled by dispatcher_api service.
     """
     global mqtt_client, mqtt_connected
 
@@ -381,40 +389,19 @@ def dispatch_rpc():
     parameters = data.get('parameters', {})
     timeout_ms = data.get('timeout_ms', 5000)
 
-    # Generate correlation ID
-    correlation_id = str(uuid.uuid4())
+    # Generate request ID
+    request_id = str(uuid.uuid4())
     timestamp_ns = int(time.time() * 1e9)
 
-    # Build RPC request message (JSON for now, can be protobuf later)
+    # Build RPC request envelope (matches dispatcher_rpc_envelope.proto)
     rpc_request = {
-        'correlation_id': correlation_id,
+        'request_id': request_id,
         'service_name': service_name,
         'method_name': method_name,
         'parameters_json': json.dumps(parameters),
         'timeout_ms': timeout_ms,
-        'request_timestamp_ns': timestamp_ns
+        'timestamp_ns': timestamp_ns
     }
-
-    # Store request in database
-    conn = get_db_connection()
-    cur = conn.cursor()
-    try:
-        cur.execute("""
-            INSERT INTO rpc_requests
-            (correlation_id, vehicle_id, service_name, method_name,
-             parameters_json, timeout_ms, request_timestamp_ns, response_status)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, 'pending')
-        """, (correlation_id, vehicle_id, service_name, method_name,
-              json.dumps(parameters), timeout_ms, timestamp_ns))
-        conn.commit()
-    except Exception as e:
-        conn.rollback()
-        cur.close()
-        conn.close()
-        return jsonify({'error': f'Database error: {str(e)}'}), 500
-    finally:
-        cur.close()
-        conn.close()
 
     # Publish to MQTT c2v topic (content_id=200 for RPC)
     topic = f"c2v/{vehicle_id}/200"
@@ -424,11 +411,11 @@ def dispatch_rpc():
     except Exception as e:
         return jsonify({
             'error': f'MQTT publish failed: {str(e)}',
-            'correlation_id': correlation_id
+            'request_id': request_id
         }), 500
 
     return jsonify({
-        'correlation_id': correlation_id,
+        'request_id': request_id,
         'vehicle_id': vehicle_id,
         'service_name': service_name,
         'method_name': method_name,
@@ -437,46 +424,8 @@ def dispatch_rpc():
     })
 
 
-@app.route('/api/rpc/<correlation_id>')
-def get_rpc_status(correlation_id):
-    """Get status of an RPC request by correlation ID"""
-    conn = get_db_connection()
-    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-
-    cur.execute("""
-        SELECT * FROM rpc_requests WHERE correlation_id = %s
-    """, (correlation_id,))
-    result = cur.fetchone()
-
-    cur.close()
-    conn.close()
-
-    if not result:
-        return jsonify({'error': 'RPC request not found'}), 404
-
-    return jsonify(result)
-
-
-@app.route('/api/rpc/vehicle/<vehicle_id>')
-def get_vehicle_rpc_history(vehicle_id):
-    """Get RPC history for a vehicle"""
-    conn = get_db_connection()
-    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-
-    limit = int(request.args.get('limit', 20))
-
-    cur.execute("""
-        SELECT * FROM rpc_requests
-        WHERE vehicle_id = %s
-        ORDER BY created_at DESC
-        LIMIT %s
-    """, (vehicle_id, limit))
-    results = cur.fetchall()
-
-    cur.close()
-    conn.close()
-
-    return jsonify({'requests': results})
+# Note: RPC status tracking removed - RPCs are now fire-and-forget from dashboard.
+# For synchronous RPC with response tracking, use the dispatcher_api gRPC service.
 
 
 # =============================================================================
@@ -661,50 +610,73 @@ def health_check():
 
 # =============================================================================
 # Service Schemas API - For dynamic form generation
+# Queries pre-parsed JSONB from schema_registry table (hash-based deduplication)
 # =============================================================================
+
 
 @app.route('/api/schemas')
 def get_schemas():
-    """Get all service schemas for UI form generation"""
+    """
+    Get all service schemas for UI form generation
+    Uses fleet_services_view which aggregates unique schemas across fleet
+    """
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
     cur.execute("""
-        SELECT service_name, version, methods, struct_definitions, enum_definitions,
-               source, updated_at
-        FROM service_schemas
+        SELECT
+            service_name,
+            version,
+            schema_hash,
+            methods,
+            struct_definitions,
+            enum_definitions,
+            vehicle_count,
+            first_seen_at
+        FROM fleet_services_view
         ORDER BY service_name
     """)
-    schemas = cur.fetchall()
+    schemas_raw = cur.fetchall()
 
     cur.close()
     conn.close()
+
+    schemas = []
+    for row in schemas_raw:
+        schemas.append({
+            'service_name': row['service_name'],
+            'version': row['version'] or '1.0.0',
+            'schema_hash': row['schema_hash'],
+            'methods': row['methods'] or [],
+            'struct_definitions': row['struct_definitions'] or {},
+            'enum_definitions': row['enum_definitions'] or {},
+            'vehicle_count': row['vehicle_count'],
+            'source': 'discovery'
+        })
 
     return jsonify({'schemas': schemas})
 
 
 @app.route('/api/schemas/<service_name>')
 def get_schema(service_name):
-    """Get specific service schema with full details"""
+    """Get specific service schema with full details including methods and types"""
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
-    version = request.args.get('version')
-
-    if version:
-        cur.execute("""
-            SELECT * FROM service_schemas
-            WHERE service_name = %s AND version = %s
-        """, (service_name, version))
-    else:
-        # Get latest version
-        cur.execute("""
-            SELECT * FROM service_schemas
-            WHERE service_name = %s
-            ORDER BY updated_at DESC
-            LIMIT 1
-        """, (service_name,))
-
+    cur.execute("""
+        SELECT
+            service_name,
+            version,
+            schema_hash,
+            ifex_schema,
+            methods,
+            struct_definitions,
+            enum_definitions,
+            schema_count as vehicle_count
+        FROM schema_registry
+        WHERE service_name = %s
+        LIMIT 1
+    """, (service_name,))
     schema = cur.fetchone()
 
     cur.close()
@@ -713,94 +685,92 @@ def get_schema(service_name):
     if not schema:
         return jsonify({'error': 'Schema not found'}), 404
 
-    return jsonify(schema)
+    return jsonify({
+        'service_name': schema['service_name'],
+        'version': schema['version'] or '1.0.0',
+        'schema_hash': schema['schema_hash'],
+        'ifex_schema': schema['ifex_schema'],
+        'methods': schema['methods'] or [],
+        'struct_definitions': schema['struct_definitions'] or {},
+        'enum_definitions': schema['enum_definitions'] or {},
+        'vehicle_count': schema['vehicle_count'],
+        'source': 'discovery'
+    })
 
 
-@app.route('/api/schemas', methods=['POST'])
-def upsert_schema():
-    """Create or update a service schema"""
-    data = request.get_json()
-    if not data:
-        return jsonify({'error': 'JSON body required'}), 400
-
-    required = ['service_name', 'schema_json']
-    for field in required:
-        if field not in data:
-            return jsonify({'error': f'Missing required field: {field}'}), 400
-
+@app.route('/api/discovered-services')
+def get_discovered_services():
+    """Get services discovered from vehicles (for Services tab)"""
     conn = get_db_connection()
-    cur = conn.cursor()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
-    try:
-        # Extract methods, structs, enums from schema_json
-        schema_json = data['schema_json']
-        methods = []
-        struct_defs = {}
-        enum_defs = {}
+    vehicle_id = request.args.get('vehicle_id')
 
-        # Parse namespaces to extract methods
-        for ns in schema_json.get('namespaces', []):
-            for method in ns.get('methods', []):
-                methods.append({
-                    'namespace': ns.get('name'),
-                    'name': method.get('name'),
-                    'description': method.get('description'),
-                    'input_parameters': method.get('input', []),
-                    'output_parameters': method.get('output', []),
-                    'is_schedulable': method.get('x_scheduling', {}).get('enabled', False)
-                })
-
-            # Extract struct definitions
-            for struct in ns.get('structs', []):
-                struct_defs[struct['name']] = {
-                    'members': struct.get('members', []),
-                    'description': struct.get('description')
-                }
-
-            # Extract enum definitions
-            for enum in ns.get('enumerations', []):
-                enum_defs[enum['name']] = {
-                    'options': [{'name': o['name'], 'value': o.get('value', i)}
-                               for i, o in enumerate(enum.get('options', []))],
-                    'description': enum.get('description')
-                }
-
+    if vehicle_id:
+        # Services for specific vehicle
         cur.execute("""
-            INSERT INTO service_schemas
-            (service_name, version, schema_json, methods, struct_definitions, enum_definitions, source)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (service_name, version) DO UPDATE SET
-                schema_json = EXCLUDED.schema_json,
-                methods = EXCLUDED.methods,
-                struct_definitions = EXCLUDED.struct_definitions,
-                enum_definitions = EXCLUDED.enum_definitions,
-                updated_at = NOW()
-            RETURNING id
-        """, (
-            data['service_name'],
-            data.get('version', '1.0.0'),
-            json.dumps(schema_json),
-            json.dumps(methods),
-            json.dumps(struct_defs),
-            json.dumps(enum_defs),
-            data.get('source', 'manual')
-        ))
+            SELECT
+                vs.service_name,
+                vs.version,
+                vs.schema_hash,
+                vs.methods,
+                vs.last_seen_at,
+                COALESCE(v.is_online, false) as is_online
+            FROM vehicle_services_view vs
+            LEFT JOIN vehicles v ON vs.vehicle_id = v.vehicle_id
+            WHERE vs.vehicle_id = %s
+            ORDER BY vs.service_name
+        """, (vehicle_id,))
+        services = cur.fetchall()
 
-        result = cur.fetchone()
-        conn.commit()
-
-        return jsonify({
-            'id': result[0],
-            'service_name': data['service_name'],
-            'status': 'created'
-        })
-
-    except Exception as e:
-        conn.rollback()
-        return jsonify({'error': str(e)}), 500
-    finally:
         cur.close()
         conn.close()
+
+        enriched = []
+        for svc in services:
+            methods = svc['methods'] or []
+            enriched.append({
+                'service_name': svc['service_name'],
+                'version': svc['version'],
+                'schema_hash': svc['schema_hash'],
+                'last_seen_at': svc['last_seen_at'].isoformat() if svc['last_seen_at'] else None,
+                'is_online': svc['is_online'],
+                'method_count': len(methods),
+                'has_schema': True
+            })
+        return jsonify({'services': enriched})
+
+    else:
+        # All services grouped from schema_registry
+        cur.execute("""
+            SELECT
+                service_name,
+                version,
+                schema_hash,
+                methods,
+                schema_count as vehicle_count,
+                first_seen_at as last_seen
+            FROM schema_registry
+            ORDER BY schema_count DESC
+        """)
+        services = cur.fetchall()
+
+        cur.close()
+        conn.close()
+
+        enriched = []
+        for svc in services:
+            methods = svc['methods'] or []
+            enriched.append({
+                'service_name': svc['service_name'],
+                'version': svc['version'],
+                'schema_hash': svc['schema_hash'],
+                'vehicle_count': svc['vehicle_count'],
+                'last_seen': svc['last_seen'].isoformat() if svc['last_seen'] else None,
+                'method_count': len(methods),
+                'has_schema': True
+            })
+        return jsonify({'services': enriched})
 
 
 # =============================================================================
