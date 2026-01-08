@@ -73,7 +73,7 @@ void SchedulerStore::process_offboard_message(
                 break;
 
             case swdv::scheduler_sync_envelope::HEARTBEAT:
-                handle_heartbeat(vehicle_id, event.timestamp_ns());
+                handle_heartbeat(vehicle_id, event.timestamp_ms());
                 break;
         }
     }

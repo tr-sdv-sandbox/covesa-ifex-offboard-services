@@ -21,12 +21,10 @@
 #include "postgres_client.hpp"
 
 // Vehicle-side codecs (decode incoming)
-#include "discovery_codec.hpp"
 #include "scheduler_codec.hpp"
 #include "rpc_codec.hpp"
 
 // Offboard codecs (encode outgoing)
-#include "discovery_offboard_codec.hpp"
 #include "scheduler_offboard_codec.hpp"
 #include "rpc_offboard_codec.hpp"
 
@@ -49,6 +47,7 @@ DEFINE_string(kafka_topic_scheduler, "ifex.scheduler.202", "Kafka topic for sche
 
 // c2v topic configuration (cloud-to-vehicle)
 DEFINE_string(kafka_topic_c2v_rpc, "ifex.c2v.rpc", "Kafka topic for RPC requests to vehicles");
+DEFINE_string(kafka_topic_c2v_discovery, "ifex.c2v.discovery", "Kafka topic for discovery schema requests to vehicles");
 DEFINE_string(kafka_topic_c2v_scheduler, "ifex.c2v.scheduler", "Kafka topic for scheduler commands to vehicles");
 DEFINE_string(kafka_c2v_group_id, "mqtt-kafka-bridge-c2v", "Consumer group ID for c2v topics");
 
@@ -86,49 +85,8 @@ void signal_handler(int signum) {
     }
 }
 
-/// Create a transform for discovery sync messages (content_id=201)
-/// Decodes vehicle proto, wraps in offboard envelope with metadata
-ifex::offboard::TransformFn make_discovery_transform(const std::string& bridge_id) {
-    return [bridge_id](const std::string& vehicle_id,
-              uint32_t content_id,
-              const std::string& payload,
-              const std::optional<ifex::offboard::VehicleContext>& ctx)
-        -> std::optional<std::string> {
-
-        // Decode the incoming sync message from vehicle
-        auto msg = ifex::offboard::decode_discovery_sync(payload);
-        if (!msg) {
-            LOG(WARNING) << "Failed to decode discovery sync from " << vehicle_id;
-            return std::nullopt;  // Drop malformed messages
-        }
-
-        // Extract enrichment from context
-        std::string fleet_id, region;
-        if (ctx) {
-            fleet_id = ctx->fleet_id;
-            region = ctx->region;
-        }
-
-        // Create offboard envelope with vehicle_id and enrichment
-        std::string offboard_payload = ifex::offboard::encode_discovery_offboard(
-            vehicle_id,
-            *msg,
-            fleet_id,
-            region,
-            bridge_id
-        );
-
-        LOG(INFO) << "Discovery sync from " << vehicle_id
-                  << ": events=" << msg->events_size()
-                  << " total_services=" << msg->total_services()
-                  << " fleet=" << fleet_id
-                  << " -> offboard(" << offboard_payload.size() << " bytes)";
-
-        return offboard_payload;
-    };
-}
-
-/// Create a transform for scheduler sync messages (content_id=202)
+/// Create a transform for scheduler messages (content_id=202)
+/// Handles both sync_message_t (state sync) and scheduler_command_ack_t (command acks)
 /// Decodes vehicle proto, wraps in offboard envelope with metadata
 ifex::offboard::TransformFn make_scheduler_transform(const std::string& bridge_id) {
     return [bridge_id](const std::string& vehicle_id,
@@ -137,36 +95,52 @@ ifex::offboard::TransformFn make_scheduler_transform(const std::string& bridge_i
               const std::optional<ifex::offboard::VehicleContext>& ctx)
         -> std::optional<std::string> {
 
-        // Decode the incoming sync message from vehicle
+        // Try to decode as sync message first (most common case)
         auto msg = ifex::offboard::decode_scheduler_sync(payload);
-        if (!msg) {
-            LOG(WARNING) << "Failed to decode scheduler sync from " << vehicle_id;
+        if (msg) {
+            // Extract enrichment from context
+            std::string fleet_id, region;
+            if (ctx) {
+                fleet_id = ctx->fleet_id;
+                region = ctx->region;
+            }
+
+            // Create offboard envelope with vehicle_id and enrichment
+            std::string offboard_payload = ifex::offboard::encode_scheduler_offboard(
+                vehicle_id,
+                *msg,
+                fleet_id,
+                region,
+                bridge_id
+            );
+
+            LOG(INFO) << "Scheduler sync from " << vehicle_id
+                      << ": events=" << msg->events_size()
+                      << " active_jobs=" << msg->active_jobs_count()
+                      << " fleet=" << fleet_id
+                      << " -> offboard(" << offboard_payload.size() << " bytes)";
+
+            return offboard_payload;
+        }
+
+        // Try to decode as command ack (sent after cloud command execution)
+        auto ack = ifex::offboard::decode_scheduler_command_ack(payload);
+        if (ack) {
+            // Log the command ack but don't forward to Kafka (drop)
+            // Cloud scheduler API tracks its own commands via request correlation
+            LOG(INFO) << "Scheduler command ack from " << vehicle_id
+                      << ": command_id=" << ack->command_id()
+                      << " success=" << (ack->success() ? "true" : "false")
+                      << (ack->job_id().empty() ? "" : " job_id=" + ack->job_id())
+                      << (ack->error_message().empty() ? "" : " error=" + ack->error_message());
+
+            // Return nullopt to drop the message (don't forward to Kafka)
             return std::nullopt;
         }
 
-        // Extract enrichment from context
-        std::string fleet_id, region;
-        if (ctx) {
-            fleet_id = ctx->fleet_id;
-            region = ctx->region;
-        }
-
-        // Create offboard envelope with vehicle_id and enrichment
-        std::string offboard_payload = ifex::offboard::encode_scheduler_offboard(
-            vehicle_id,
-            *msg,
-            fleet_id,
-            region,
-            bridge_id
-        );
-
-        LOG(INFO) << "Scheduler sync from " << vehicle_id
-                  << ": events=" << msg->events_size()
-                  << " active_jobs=" << msg->active_jobs_count()
-                  << " fleet=" << fleet_id
-                  << " -> offboard(" << offboard_payload.size() << " bytes)";
-
-        return offboard_payload;
+        LOG(WARNING) << "Failed to decode scheduler message from " << vehicle_id
+                     << " (" << payload.size() << " bytes) - unknown message type";
+        return std::nullopt;
     };
 }
 
@@ -281,11 +255,11 @@ int main(int argc, char* argv[]) {
     router.set_require_context(FLAGS_require_vehicle_context);
 
     // Register v2c handlers for each content_id (vehicle-to-cloud)
-    // All messages are transformed to offboard format with vehicle_id and enrichment
+    // RPC and scheduler messages are transformed to offboard format with vehicle_id
+    // Discovery messages use passthrough (hash-based protocol includes vehicle_id)
     router.register_handler(200, FLAGS_kafka_topic_rpc,
                             make_rpc_transform(FLAGS_bridge_id));
-    router.register_handler(201, FLAGS_kafka_topic_discovery,
-                            make_discovery_transform(FLAGS_bridge_id));
+    router.register_handler(201, FLAGS_kafka_topic_discovery, nullptr);  // Passthrough
     router.register_handler(202, FLAGS_kafka_topic_scheduler,
                             make_scheduler_transform(FLAGS_bridge_id));
 
@@ -297,11 +271,13 @@ int main(int argc, char* argv[]) {
     // Register c2v handlers (cloud-to-vehicle)
     // These consume from Kafka and publish to MQTT c2v topics
     // Default transform: Kafka message key = vehicle_id, value = payload (passthrough)
-    router.register_c2v_handler(FLAGS_kafka_topic_c2v_rpc, 200);      // RPC requests
-    router.register_c2v_handler(FLAGS_kafka_topic_c2v_scheduler, 202); // Scheduler commands
+    router.register_c2v_handler(FLAGS_kafka_topic_c2v_rpc, 200);         // RPC requests
+    router.register_c2v_handler(FLAGS_kafka_topic_c2v_discovery, 201);   // Schema requests
+    router.register_c2v_handler(FLAGS_kafka_topic_c2v_scheduler, 202);   // Scheduler commands
 
     LOG(INFO) << "Registered c2v handlers (Kafka -> MQTT):";
     LOG(INFO) << "  " << FLAGS_kafka_topic_c2v_rpc << " -> c2v/*/200";
+    LOG(INFO) << "  " << FLAGS_kafka_topic_c2v_discovery << " -> c2v/*/201";
     LOG(INFO) << "  " << FLAGS_kafka_topic_c2v_scheduler << " -> c2v/*/202";
 
     // Initialize PostgreSQL for status updates

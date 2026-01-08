@@ -129,7 +129,7 @@ bool JobCommandProducer::send_create_job(
 
     cmd::scheduler_command_t command;
     command.set_command_id(command_id);
-    command.set_timestamp_ns(std::chrono::duration_cast<std::chrono::nanoseconds>(
+    command.set_timestamp_ms(std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count());
     command.set_requester_id(requester_id);
     command.set_type(cmd::COMMAND_CREATE_JOB);
@@ -162,7 +162,7 @@ bool JobCommandProducer::send_update_job(
 
     cmd::scheduler_command_t command;
     command.set_command_id(command_id);
-    command.set_timestamp_ns(std::chrono::duration_cast<std::chrono::nanoseconds>(
+    command.set_timestamp_ms(std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count());
     command.set_requester_id(requester_id);
     command.set_type(cmd::COMMAND_UPDATE_JOB);
@@ -188,7 +188,7 @@ bool JobCommandProducer::send_delete_job(
 
     cmd::scheduler_command_t command;
     command.set_command_id(command_id);
-    command.set_timestamp_ns(std::chrono::duration_cast<std::chrono::nanoseconds>(
+    command.set_timestamp_ms(std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count());
     command.set_requester_id(requester_id);
     command.set_type(cmd::COMMAND_DELETE_JOB);
@@ -207,7 +207,7 @@ bool JobCommandProducer::send_pause_job(
 
     cmd::scheduler_command_t command;
     command.set_command_id(command_id);
-    command.set_timestamp_ns(std::chrono::duration_cast<std::chrono::nanoseconds>(
+    command.set_timestamp_ms(std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count());
     command.set_requester_id(requester_id);
     command.set_type(cmd::COMMAND_PAUSE_JOB);
@@ -226,7 +226,7 @@ bool JobCommandProducer::send_resume_job(
 
     cmd::scheduler_command_t command;
     command.set_command_id(command_id);
-    command.set_timestamp_ns(std::chrono::duration_cast<std::chrono::nanoseconds>(
+    command.set_timestamp_ms(std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count());
     command.set_requester_id(requester_id);
     command.set_type(cmd::COMMAND_RESUME_JOB);
@@ -245,7 +245,7 @@ bool JobCommandProducer::send_trigger_job(
 
     cmd::scheduler_command_t command;
     command.set_command_id(command_id);
-    command.set_timestamp_ns(std::chrono::duration_cast<std::chrono::nanoseconds>(
+    command.set_timestamp_ms(std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count());
     command.set_requester_id(requester_id);
     command.set_type(cmd::COMMAND_TRIGGER_JOB);

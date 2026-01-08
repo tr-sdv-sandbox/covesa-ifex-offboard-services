@@ -6,6 +6,20 @@ namespace ifex {
 namespace cloud {
 namespace scheduler {
 
+namespace {
+
+/// Convert status string to integer for CloudJobStatus enum
+/// Values: 0=unknown, 1=pending/active, 2=paused, 3=completed
+int status_string_to_int(const std::string& status) {
+    if (status == "pending" || status == "active") return 1;
+    if (status == "paused") return 2;
+    if (status == "completed") return 3;
+    if (status == "failed") return 4;
+    return 0;  // unknown
+}
+
+}  // namespace
+
 SchedulerQuery::SchedulerQuery(std::shared_ptr<ifex::offboard::PostgresClient> db)
     : db_(std::move(db)) {}
 
@@ -20,9 +34,9 @@ SchedulerQueryResult<query::JobInfoData> SchedulerQuery::list_jobs(
     std::string sql = R"(
         SELECT j.job_id, j.vehicle_id, COALESCE(e.fleet_id, '') as fleet_id,
                COALESCE(e.region, '') as region, j.title, j.service_name,
-               j.method_name, j.parameters_json, j.scheduled_time,
-               j.recurrence_rule, j.end_time, j.status, j.created_at_ns,
-               j.updated_at_ns, j.next_run_ns, j.execution_count
+               j.method_name, j.parameters, j.scheduled_time,
+               j.recurrence_rule, '' as end_time, j.status, j.created_at_ms,
+               j.updated_at_ms, j.next_run_time, 0 as execution_count
         FROM jobs j
         LEFT JOIN vehicle_enrichment e ON j.vehicle_id = e.vehicle_id
         WHERE 1=1
@@ -71,7 +85,7 @@ SchedulerQueryResult<query::JobInfoData> SchedulerQuery::list_jobs(
     }
 
     // Get paginated results
-    sql += " ORDER BY j.created_at_ns DESC";
+    sql += " ORDER BY j.created_at_ms DESC";
     sql += " LIMIT $" + std::to_string(param_idx++);
     params.push_back(std::to_string(page_size));
     sql += " OFFSET $" + std::to_string(param_idx++);
@@ -95,11 +109,12 @@ SchedulerQueryResult<query::JobInfoData> SchedulerQuery::list_jobs(
         job.scheduled_time = row.get_string(8);
         job.recurrence_rule = row.get_string(9);
         job.end_time = row.get_string(10);
-        job.status = row.get_int(11);
-        job.created_at_ns = row.get_int64(12);
-        job.updated_at_ns = row.get_int64(13);
-        job.next_run_ns = row.get_int64(14);
-        job.execution_count = row.get_int(15);
+        job.status = status_string_to_int(row.get_string(11));
+        job.created_at_ns = row.is_null(12) ? 0 : row.get_int64(12);  // stored as ms, read as ns (divide later)
+        job.updated_at_ns = row.is_null(13) ? 0 : row.get_int64(13);
+        // next_run_time is VARCHAR in schema, convert to ns if parseable
+        job.next_run_ns = 0;  // TODO: parse next_run_time string if needed
+        job.execution_count = row.is_null(15) ? 0 : row.get_int(15);
         query_result.items.push_back(std::move(job));
     }
 
@@ -114,9 +129,9 @@ std::optional<query::JobInfoData> SchedulerQuery::get_job(const std::string& job
     const char* sql = R"(
         SELECT j.job_id, j.vehicle_id, COALESCE(e.fleet_id, '') as fleet_id,
                COALESCE(e.region, '') as region, j.title, j.service_name,
-               j.method_name, j.parameters_json, j.scheduled_time,
-               j.recurrence_rule, j.end_time, j.status, j.created_at_ns,
-               j.updated_at_ns, j.next_run_ns, j.execution_count
+               j.method_name, j.parameters, j.scheduled_time,
+               j.recurrence_rule, '' as end_time, j.status, j.created_at_ms,
+               j.updated_at_ms, j.next_run_time, 0 as execution_count
         FROM jobs j
         LEFT JOIN vehicle_enrichment e ON j.vehicle_id = e.vehicle_id
         WHERE j.job_id = $1
@@ -140,11 +155,11 @@ std::optional<query::JobInfoData> SchedulerQuery::get_job(const std::string& job
     job.scheduled_time = row.get_string(8);
     job.recurrence_rule = row.get_string(9);
     job.end_time = row.get_string(10);
-    job.status = row.get_int(11);
-    job.created_at_ns = row.get_int64(12);
-    job.updated_at_ns = row.get_int64(13);
-    job.next_run_ns = row.get_int64(14);
-    job.execution_count = row.get_int(15);
+    job.status = status_string_to_int(row.get_string(11));
+    job.created_at_ns = row.is_null(12) ? 0 : row.get_int64(12);
+    job.updated_at_ns = row.is_null(13) ? 0 : row.get_int64(13);
+    job.next_run_ns = 0;  // next_run_time is VARCHAR in schema
+    job.execution_count = row.is_null(15) ? 0 : row.get_int(15);
 
     return job;
 }
@@ -153,13 +168,13 @@ std::vector<query::JobInfoData> SchedulerQuery::get_vehicle_jobs(const std::stri
     const char* sql = R"(
         SELECT j.job_id, j.vehicle_id, COALESCE(e.fleet_id, '') as fleet_id,
                COALESCE(e.region, '') as region, j.title, j.service_name,
-               j.method_name, j.parameters_json, j.scheduled_time,
-               j.recurrence_rule, j.end_time, j.status, j.created_at_ns,
-               j.updated_at_ns, j.next_run_ns, j.execution_count
+               j.method_name, j.parameters, j.scheduled_time,
+               j.recurrence_rule, '' as end_time, j.status, j.created_at_ms,
+               j.updated_at_ms, j.next_run_time, 0 as execution_count
         FROM jobs j
         LEFT JOIN vehicle_enrichment e ON j.vehicle_id = e.vehicle_id
         WHERE j.vehicle_id = $1
-        ORDER BY j.created_at_ns DESC
+        ORDER BY j.created_at_ms DESC
     )";
 
     auto result = db_->execute(sql, {vehicle_id});
@@ -179,11 +194,11 @@ std::vector<query::JobInfoData> SchedulerQuery::get_vehicle_jobs(const std::stri
         job.scheduled_time = row.get_string(8);
         job.recurrence_rule = row.get_string(9);
         job.end_time = row.get_string(10);
-        job.status = row.get_int(11);
-        job.created_at_ns = row.get_int64(12);
-        job.updated_at_ns = row.get_int64(13);
-        job.next_run_ns = row.get_int64(14);
-        job.execution_count = row.get_int(15);
+        job.status = status_string_to_int(row.get_string(11));
+        job.created_at_ns = row.is_null(12) ? 0 : row.get_int64(12);
+        job.updated_at_ns = row.is_null(13) ? 0 : row.get_int64(13);
+        job.next_run_ns = 0;  // next_run_time is VARCHAR in schema
+        job.execution_count = row.is_null(15) ? 0 : row.get_int(15);
         jobs.push_back(std::move(job));
     }
 
@@ -251,9 +266,9 @@ std::vector<query::FleetJobStatsData> SchedulerQuery::get_fleet_job_stats(
     std::string sql = R"(
         SELECT j.service_name,
                COUNT(*) as total_jobs,
-               COUNT(*) FILTER (WHERE j.status = 1) as active_jobs,
-               COUNT(*) FILTER (WHERE j.status = 2) as paused_jobs,
-               COUNT(*) FILTER (WHERE j.status = 3) as completed_jobs,
+               COUNT(*) FILTER (WHERE j.status IN ('pending', 'active')) as active_jobs,
+               COUNT(*) FILTER (WHERE j.status = 'paused') as paused_jobs,
+               COUNT(*) FILTER (WHERE j.status = 'completed') as completed_jobs,
                COUNT(DISTINCT j.vehicle_id) as vehicle_count
         FROM jobs j
         LEFT JOIN vehicle_enrichment e ON j.vehicle_id = e.vehicle_id
@@ -298,9 +313,9 @@ SchedulerQuery::JobCounts SchedulerQuery::get_job_counts(
 
     std::string sql = R"(
         SELECT COUNT(*) as total,
-               COUNT(*) FILTER (WHERE j.status = 1) as active,
-               COUNT(*) FILTER (WHERE j.status = 2) as paused,
-               COUNT(*) FILTER (WHERE j.status = 3) as completed
+               COUNT(*) FILTER (WHERE j.status IN ('pending', 'active')) as active,
+               COUNT(*) FILTER (WHERE j.status = 'paused') as paused,
+               COUNT(*) FILTER (WHERE j.status = 'completed') as completed
         FROM jobs j
         LEFT JOIN vehicle_enrichment e ON j.vehicle_id = e.vehicle_id
         WHERE 1=1

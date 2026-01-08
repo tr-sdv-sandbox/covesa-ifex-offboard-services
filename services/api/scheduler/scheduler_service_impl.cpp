@@ -1,6 +1,7 @@
 #include "scheduler_service_impl.hpp"
 
 #include <glog/logging.h>
+#include <chrono>
 #include <random>
 #include <sstream>
 #include <iomanip>
@@ -72,6 +73,49 @@ grpc::Status CloudSchedulerServiceImpl::CreateJob(
             request->end_time(),
             request->created_by());
 
+        if (sent) {
+            // Store job in cloud database for immediate query access
+            // Note: Vehicle must already exist - created via status tracking (is_online topic)
+            auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count();
+
+            // Default empty parameters to valid JSON object
+            std::string params_json = request->parameters_json();
+            if (params_json.empty()) {
+                params_json = "{}";
+            }
+
+            auto result = db_->execute(R"(
+                INSERT INTO jobs (vehicle_id, job_id, title, service_name, method_name,
+                                  parameters, scheduled_time, recurrence_rule,
+                                  status, created_at_ms, updated_at_ms)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending', $9, $9)
+                ON CONFLICT (vehicle_id, job_id) DO UPDATE SET
+                    title = EXCLUDED.title,
+                    service_name = EXCLUDED.service_name,
+                    method_name = EXCLUDED.method_name,
+                    parameters = EXCLUDED.parameters,
+                    scheduled_time = EXCLUDED.scheduled_time,
+                    recurrence_rule = EXCLUDED.recurrence_rule,
+                    updated_at_ms = EXCLUDED.updated_at_ms
+            )", {
+                request->vehicle_id(),
+                job_id,
+                request->title(),
+                request->service(),
+                request->method(),
+                params_json,
+                request->scheduled_time(),
+                request->recurrence_rule(),
+                std::to_string(now_ms)
+            });
+
+            if (!result.ok()) {
+                LOG(WARNING) << "Failed to store job in cloud DB: " << result.error()
+                             << " (vehicle may not exist yet)";
+            }
+        }
+
         response->set_job_id(job_id);
         response->set_success(sent);
 
@@ -96,18 +140,18 @@ grpc::Status CloudSchedulerServiceImpl::UpdateJob(
         return grpc::Status(grpc::INVALID_ARGUMENT, "job_id is required");
     }
 
-    // Look up job to get vehicle_id
-    auto job = query_.get_job(request->job_id());
-    if (!job) {
-        return grpc::Status(grpc::NOT_FOUND, "Job not found");
-    }
-
-    std::string command_id = generate_command_id();
-
-    LOG(INFO) << "UpdateJob: job=" << request->job_id()
-              << " vehicle=" << job->vehicle_id;
-
     try {
+        // Look up job to get vehicle_id
+        auto job = query_.get_job(request->job_id());
+        if (!job) {
+            return grpc::Status(grpc::NOT_FOUND, "Job not found");
+        }
+
+        std::string command_id = generate_command_id();
+
+        LOG(INFO) << "UpdateJob: job=" << request->job_id()
+                  << " vehicle=" << job->vehicle_id;
+
         bool sent = producer_->send_update_job(
             job->vehicle_id,
             command_id,
@@ -142,17 +186,17 @@ grpc::Status CloudSchedulerServiceImpl::DeleteJob(
         return grpc::Status(grpc::INVALID_ARGUMENT, "job_id is required");
     }
 
-    auto job = query_.get_job(request->job_id());
-    if (!job) {
-        return grpc::Status(grpc::NOT_FOUND, "Job not found");
-    }
-
-    std::string command_id = generate_command_id();
-
-    LOG(INFO) << "DeleteJob: job=" << request->job_id()
-              << " vehicle=" << job->vehicle_id;
-
     try {
+        auto job = query_.get_job(request->job_id());
+        if (!job) {
+            return grpc::Status(grpc::NOT_FOUND, "Job not found");
+        }
+
+        std::string command_id = generate_command_id();
+
+        LOG(INFO) << "DeleteJob: job=" << request->job_id()
+                  << " vehicle=" << job->vehicle_id;
+
         bool sent = producer_->send_delete_job(
             job->vehicle_id,
             command_id,
@@ -182,16 +226,16 @@ grpc::Status CloudSchedulerServiceImpl::PauseJob(
         return grpc::Status(grpc::INVALID_ARGUMENT, "job_id is required");
     }
 
-    auto job = query_.get_job(request->job_id());
-    if (!job) {
-        return grpc::Status(grpc::NOT_FOUND, "Job not found");
-    }
-
-    std::string command_id = generate_command_id();
-
-    LOG(INFO) << "PauseJob: job=" << request->job_id();
-
     try {
+        auto job = query_.get_job(request->job_id());
+        if (!job) {
+            return grpc::Status(grpc::NOT_FOUND, "Job not found");
+        }
+
+        std::string command_id = generate_command_id();
+
+        LOG(INFO) << "PauseJob: job=" << request->job_id();
+
         bool sent = producer_->send_pause_job(
             job->vehicle_id,
             command_id,
@@ -217,16 +261,16 @@ grpc::Status CloudSchedulerServiceImpl::ResumeJob(
         return grpc::Status(grpc::INVALID_ARGUMENT, "job_id is required");
     }
 
-    auto job = query_.get_job(request->job_id());
-    if (!job) {
-        return grpc::Status(grpc::NOT_FOUND, "Job not found");
-    }
-
-    std::string command_id = generate_command_id();
-
-    LOG(INFO) << "ResumeJob: job=" << request->job_id();
-
     try {
+        auto job = query_.get_job(request->job_id());
+        if (!job) {
+            return grpc::Status(grpc::NOT_FOUND, "Job not found");
+        }
+
+        std::string command_id = generate_command_id();
+
+        LOG(INFO) << "ResumeJob: job=" << request->job_id();
+
         bool sent = producer_->send_resume_job(
             job->vehicle_id,
             command_id,
@@ -252,16 +296,16 @@ grpc::Status CloudSchedulerServiceImpl::TriggerJob(
         return grpc::Status(grpc::INVALID_ARGUMENT, "job_id is required");
     }
 
-    auto job = query_.get_job(request->job_id());
-    if (!job) {
-        return grpc::Status(grpc::NOT_FOUND, "Job not found");
-    }
-
-    std::string command_id = generate_command_id();
-
-    LOG(INFO) << "TriggerJob: job=" << request->job_id();
-
     try {
+        auto job = query_.get_job(request->job_id());
+        if (!job) {
+            return grpc::Status(grpc::NOT_FOUND, "Job not found");
+        }
+
+        std::string command_id = generate_command_id();
+
+        LOG(INFO) << "TriggerJob: job=" << request->job_id();
+
         bool sent = producer_->send_trigger_job(
             job->vehicle_id,
             command_id,
