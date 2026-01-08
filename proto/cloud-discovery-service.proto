@@ -4,7 +4,19 @@ syntax = "proto3";
 
 package ifex.cloud.discovery;
 
-import "discovery-sync-envelope.proto";
+// Service info returned by cloud discovery queries
+// This is extracted from IFEX schemas stored in schema_registry
+message ServiceInfo {
+    string schema_hash = 1;         // SHA-256 hash of IFEX schema
+    string service_name = 2;        // Service name from IFEX
+    string version = 3;             // Service version
+    string ifex_schema = 4;         // Full IFEX YAML (optional, for detailed queries)
+    string methods_json = 5;        // Pre-parsed methods as JSON
+    string structs_json = 6;        // Pre-parsed struct definitions as JSON
+    string enums_json = 7;          // Pre-parsed enum definitions as JSON
+    uint64 first_seen_ms = 8;       // When first reported
+    uint64 last_seen_ms = 9;        // Last time any vehicle reported this schema
+}
 
 // === Vehicle Summary ===
 
@@ -16,7 +28,7 @@ message VehicleSummary {
     int32 year = 5;
     int32 service_count = 6;
     int32 job_count = 7;
-    uint64 last_seen_ns = 8;
+    uint64 last_seen_ms = 8;
     bool is_online = 9;
 }
 
@@ -26,7 +38,7 @@ message ServiceLocation {
     string vehicle_id = 1;
     string fleet_id = 2;
     string region = 3;
-    swdv.discovery_sync_envelope.service_info_t service = 4;
+    ServiceInfo service = 4;
 }
 
 // === Service Statistics ===
@@ -66,9 +78,8 @@ message GetVehicleServicesResponse {
     string vehicle_id = 1;
     string fleet_id = 2;
     string region = 3;
-    repeated swdv.discovery_sync_envelope.service_info_t services = 4;
-    uint64 last_sync_ns = 5;
-    uint32 state_checksum = 6;
+    repeated ServiceInfo services = 4;
+    uint64 last_sync_ms = 5;
 }
 
 // === Query Services By Name ===

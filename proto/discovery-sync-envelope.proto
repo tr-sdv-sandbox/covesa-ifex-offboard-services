@@ -70,7 +70,7 @@ message service_info_t {
 message sync_event_t {
   sync_event_type_t event_type = 1;
   uint64 sequence_number = 2;
-  uint64 timestamp_ns = 3;
+  uint64 timestamp_ms = 3;
   string registration_id = 4;
   service_info_t service_info = 5;
 }
@@ -89,6 +89,43 @@ message sync_ack_t {
   uint64 last_sequence_received = 1;
   bool checksum_match = 2;
   bool request_full_sync = 3;
+}
+
+// Service name to schema hash mapping
+message hash_entry_t {
+  string service_name = 1;
+  string version = 2;
+  string schema_hash = 3;
+}
+
+// List of service schema hashes (vehicle → cloud manifest)
+message hash_list_t {
+  repeated hash_entry_t hashes = 1;
+}
+
+// Cloud request for unknown schemas
+message schema_request_t {
+  repeated string hashes = 1;
+}
+
+// Hash to full schema mapping
+message schema_entry_t {
+  string schema_hash = 1;
+  string ifex_schema = 2;
+}
+
+// Vehicle response with requested schemas
+message schema_map_t {
+  repeated schema_entry_t schemas = 1;
+}
+
+// Discovery sync envelope (hash-based protocol)
+message discovery_envelope_t {
+  string vehicle_id = 1;
+  string instance_id = 2;
+  hash_list_t manifest = 3;
+  schema_request_t schema_request = 4;
+  schema_map_t schemas = 5;
 }
 
 

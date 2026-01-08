@@ -54,7 +54,7 @@ grpc::Status CloudDiscoveryServiceImpl::ListVehicles(
             vehicle->set_year(v.year);
             vehicle->set_service_count(v.service_count);
             vehicle->set_job_count(v.job_count);
-            vehicle->set_last_seen_ns(v.last_seen_ns);
+            vehicle->set_last_seen_ms(v.last_seen_ms);
             vehicle->set_is_online(v.is_online);
         }
 
@@ -85,26 +85,21 @@ grpc::Status CloudDiscoveryServiceImpl::GetVehicleServices(
 
         for (const auto& s : services) {
             auto* svc = response->add_services();
-            svc->set_name(s.service_name);
+            svc->set_schema_hash(s.schema_hash);
+            svc->set_service_name(s.service_name);
             svc->set_version(s.version);
-            svc->mutable_endpoint()->set_address(s.endpoint_address);
-            // Map transport_type string to enum
-            if (s.transport_type == "grpc") {
-                svc->mutable_endpoint()->set_transport(swdv::discovery_sync_envelope::GRPC);
-            } else if (s.transport_type == "http_rest") {
-                svc->mutable_endpoint()->set_transport(swdv::discovery_sync_envelope::HTTP_REST);
-            } else if (s.transport_type == "someip") {
-                svc->mutable_endpoint()->set_transport(swdv::discovery_sync_envelope::SOMEIP);
-            }
-            svc->set_status(s.status);
-            svc->set_last_heartbeat_ms(s.last_heartbeat_ms);
+            svc->set_ifex_schema(s.ifex_schema);
+            svc->set_methods_json(s.methods_json);
+            svc->set_structs_json(s.structs_json);
+            svc->set_enums_json(s.enums_json);
+            svc->set_first_seen_ms(s.first_seen_ms);
+            svc->set_last_seen_ms(s.last_seen_ms);
         }
 
-        // Get sync state
+        // Get sync state (last_sync_ms)
         auto sync_state = query_.get_sync_state(request->vehicle_id());
         if (sync_state) {
-            response->set_last_sync_ns(sync_state->discovery_sequence);
-            response->set_state_checksum(sync_state->state_checksum);
+            response->set_last_sync_ms(sync_state->discovery_sequence);
         }
 
         return grpc::Status::OK;
@@ -158,11 +153,15 @@ grpc::Status CloudDiscoveryServiceImpl::QueryServicesByName(
             loc->set_region(s.region);
             // Set nested service info
             auto* svc = loc->mutable_service();
-            svc->set_name(s.service_name);
-            svc->set_version(s.version);
-            svc->mutable_endpoint()->set_address(s.endpoint_address);
-            svc->set_status(s.status);
-            svc->set_last_heartbeat_ms(s.last_heartbeat_ms);
+            svc->set_schema_hash(s.service.schema_hash);
+            svc->set_service_name(s.service.service_name);
+            svc->set_version(s.service.version);
+            svc->set_ifex_schema(s.service.ifex_schema);
+            svc->set_methods_json(s.service.methods_json);
+            svc->set_structs_json(s.service.structs_json);
+            svc->set_enums_json(s.service.enums_json);
+            svc->set_first_seen_ms(s.service.first_seen_ms);
+            svc->set_last_seen_ms(s.service.last_seen_ms);
         }
 
         response->set_total_count(result.total_count);
@@ -268,7 +267,7 @@ grpc::Status CloudDiscoveryServiceImpl::FindVehiclesWithService(
             vehicle->set_year(v.year);
             vehicle->set_service_count(v.service_count);
             vehicle->set_job_count(v.job_count);
-            vehicle->set_last_seen_ns(v.last_seen_ns);
+            vehicle->set_last_seen_ms(v.last_seen_ms);
             vehicle->set_is_online(v.is_online);
         }
 

@@ -18,30 +18,25 @@ CREATE TABLE vehicles (
 COMMENT ON TABLE vehicles IS 'Tracked vehicles from discovery sync';
 
 -- =============================================================================
--- Services registry (from content_id=201)
+-- Vehicle enrichment (source of truth, published to Kafka on startup/change)
 -- =============================================================================
-CREATE TABLE services (
-    id SERIAL PRIMARY KEY,
-    vehicle_id VARCHAR(64) NOT NULL REFERENCES vehicles(vehicle_id) ON DELETE CASCADE,
-    registration_id VARCHAR(64) NOT NULL,
-    service_name VARCHAR(128) NOT NULL,
-    version VARCHAR(32),
-    description TEXT,
-    endpoint_address VARCHAR(256),
-    transport_type VARCHAR(32),
-    status VARCHAR(32) DEFAULT 'unknown',
-    last_heartbeat_ms BIGINT,
-    namespaces JSONB DEFAULT '[]'::jsonb,
+CREATE TABLE vehicle_enrichment (
+    vehicle_id VARCHAR(64) PRIMARY KEY REFERENCES vehicles(vehicle_id) ON DELETE CASCADE,
+    fleet_id VARCHAR(64),
+    region VARCHAR(64),
+    model VARCHAR(128),
+    year INTEGER,
+    owner VARCHAR(256),
+    tags JSONB DEFAULT '[]'::jsonb,
+    custom_attributes JSONB DEFAULT '{}'::jsonb,
     created_at TIMESTAMPTZ DEFAULT NOW(),
-    updated_at TIMESTAMPTZ DEFAULT NOW(),
-    UNIQUE(vehicle_id, registration_id)
+    updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-COMMENT ON TABLE services IS 'Service registry synced from vehicles (content_id=201)';
+COMMENT ON TABLE vehicle_enrichment IS 'Vehicle metadata (source of truth). Synced to Kafka on startup and changes polled.';
 
-CREATE INDEX idx_services_vehicle ON services(vehicle_id);
-CREATE INDEX idx_services_name ON services(service_name);
-CREATE INDEX idx_services_status ON services(status);
+CREATE INDEX idx_vehicle_enrichment_fleet ON vehicle_enrichment(fleet_id);
+CREATE INDEX idx_vehicle_enrichment_region ON vehicle_enrichment(region);
 
 -- =============================================================================
 -- Jobs registry (from content_id=202)
@@ -97,30 +92,10 @@ CREATE INDEX idx_job_executions_job ON job_executions(job_id);
 CREATE INDEX idx_job_executions_time ON job_executions(executed_at_ms DESC);
 
 -- =============================================================================
--- RPC request tracking (for content_id=200)
+-- RPC request tracking - REMOVED
+-- RPCs are now ephemeral (in-memory only in dispatcher_api)
+-- No database persistence needed for RPC correlation
 -- =============================================================================
-CREATE TABLE rpc_requests (
-    id SERIAL PRIMARY KEY,
-    correlation_id VARCHAR(64) UNIQUE NOT NULL,
-    vehicle_id VARCHAR(64) NOT NULL REFERENCES vehicles(vehicle_id) ON DELETE CASCADE,
-    service_name VARCHAR(128),
-    method_name VARCHAR(128),
-    parameters_json TEXT,
-    timeout_ms INTEGER,
-    request_timestamp_ns BIGINT,
-    response_status VARCHAR(32),
-    result_json TEXT,
-    error_message TEXT,
-    duration_ms INTEGER,
-    created_at TIMESTAMPTZ DEFAULT NOW(),
-    responded_at TIMESTAMPTZ
-);
-
-COMMENT ON TABLE rpc_requests IS 'Cloud-to-vehicle RPC request/response tracking';
-
-CREATE INDEX idx_rpc_requests_correlation ON rpc_requests(correlation_id);
-CREATE INDEX idx_rpc_requests_vehicle ON rpc_requests(vehicle_id);
-CREATE INDEX idx_rpc_requests_pending ON rpc_requests(responded_at) WHERE responded_at IS NULL;
 
 -- =============================================================================
 -- Sync state tracking
@@ -128,10 +103,10 @@ CREATE INDEX idx_rpc_requests_pending ON rpc_requests(responded_at) WHERE respon
 CREATE TABLE sync_state (
     vehicle_id VARCHAR(64) PRIMARY KEY REFERENCES vehicles(vehicle_id) ON DELETE CASCADE,
     discovery_sequence BIGINT DEFAULT 0,
-    discovery_checksum INTEGER,
+    discovery_checksum BIGINT,  -- uint32_t can exceed INT_MAX
     discovery_last_sync TIMESTAMPTZ,
     scheduler_sequence BIGINT DEFAULT 0,
-    scheduler_checksum INTEGER,
+    scheduler_checksum BIGINT,  -- uint32_t can exceed INT_MAX
     scheduler_last_sync TIMESTAMPTZ,
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -168,11 +143,15 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- Function to update sync state
+-- Drop old versions with different parameter types to avoid ambiguity
+DROP FUNCTION IF EXISTS update_sync_state(VARCHAR, VARCHAR, BIGINT, INTEGER);
+DROP FUNCTION IF EXISTS update_sync_state(VARCHAR, VARCHAR, BIGINT, BIGINT);
+
 CREATE OR REPLACE FUNCTION update_sync_state(
     p_vehicle_id VARCHAR,
     p_sync_type VARCHAR,
     p_sequence BIGINT,
-    p_checksum INTEGER
+    p_checksum BIGINT  -- uint32_t can exceed INT_MAX
 )
 RETURNS VOID AS $$
 BEGIN
@@ -199,32 +178,73 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- =============================================================================
--- Service schemas (cached IFEX schemas for UI form generation)
+-- Schema registry (hash-based deduplication across fleet)
 -- =============================================================================
-CREATE TABLE service_schemas (
-    id SERIAL PRIMARY KEY,
-    service_name VARCHAR(128) NOT NULL,
-    version VARCHAR(32),
+CREATE TABLE schema_registry (
+    schema_hash VARCHAR(64) PRIMARY KEY,  -- SHA-256 hex (64 chars)
+    ifex_schema TEXT NOT NULL,            -- Full IFEX YAML
+    service_name VARCHAR(128) NOT NULL,   -- Extracted for convenience
+    version VARCHAR(32),                  -- Extracted for convenience
 
-    -- Full IFEX schema (JSON)
-    schema_json JSONB NOT NULL,
-
-    -- Extracted for quick lookup
-    methods JSONB,           -- Array of method definitions
-    struct_definitions JSONB,
-    enum_definitions JSONB,
+    -- Pre-parsed JSONB for fast API queries
+    methods JSONB,                        -- Array of method definitions
+    struct_definitions JSONB,             -- Struct types
+    enum_definitions JSONB,               -- Enum types
 
     -- Metadata
-    source VARCHAR(32),      -- 'vehicle_sync' or 'manual'
-    vehicle_id VARCHAR(64),  -- Source vehicle (if from sync)
-    updated_at TIMESTAMPTZ DEFAULT NOW(),
-
-    UNIQUE(service_name, version)
+    first_seen_at TIMESTAMPTZ DEFAULT NOW(),
+    first_vehicle_id VARCHAR(64),         -- Which vehicle first provided this schema
+    schema_count INTEGER DEFAULT 1        -- How many vehicles have this schema
 );
 
-COMMENT ON TABLE service_schemas IS 'Cached IFEX schemas for UI dynamic form generation';
+COMMENT ON TABLE schema_registry IS 'IFEX schemas indexed by SHA-256 hash (fleet-wide deduplication)';
 
-CREATE INDEX idx_service_schemas_name ON service_schemas(service_name);
+CREATE INDEX idx_schema_registry_name ON schema_registry(service_name);
+
+-- =============================================================================
+-- Vehicle-to-schema junction table
+-- =============================================================================
+CREATE TABLE vehicle_schemas (
+    vehicle_id VARCHAR(64) NOT NULL REFERENCES vehicles(vehicle_id) ON DELETE CASCADE,
+    schema_hash VARCHAR(64) NOT NULL REFERENCES schema_registry(schema_hash) ON DELETE CASCADE,
+    last_seen_at TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (vehicle_id, schema_hash)
+);
+
+COMMENT ON TABLE vehicle_schemas IS 'Links vehicles to their service schemas';
+
+CREATE INDEX idx_vehicle_schemas_vehicle ON vehicle_schemas(vehicle_id);
+CREATE INDEX idx_vehicle_schemas_hash ON vehicle_schemas(schema_hash);
+
+-- =============================================================================
+-- Views for API queries
+-- =============================================================================
+
+-- Services by vehicle (for Fleet tab)
+CREATE OR REPLACE VIEW vehicle_services_view AS
+SELECT
+    vs.vehicle_id,
+    sr.service_name,
+    sr.version,
+    sr.schema_hash,
+    sr.methods,
+    vs.last_seen_at
+FROM vehicle_schemas vs
+JOIN schema_registry sr ON vs.schema_hash = sr.schema_hash;
+
+-- Unique services across fleet (for Services tab)
+CREATE OR REPLACE VIEW fleet_services_view AS
+SELECT
+    sr.service_name,
+    sr.version,
+    sr.schema_hash,
+    sr.methods,
+    sr.struct_definitions,
+    sr.enum_definitions,
+    sr.schema_count AS vehicle_count,
+    sr.first_seen_at
+FROM schema_registry sr
+ORDER BY sr.service_name, sr.version;
 
 -- =============================================================================
 -- Offboard calendar (cloud-side scheduled jobs, pre-sync to vehicle)
