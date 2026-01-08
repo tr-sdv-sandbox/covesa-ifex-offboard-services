@@ -9,12 +9,12 @@ IFEX Offboard Services is a cloud-side component for managing vehicle fleets usi
 1. **MQTT→Kafka Bridge** - Routes vehicle messages to Kafka topics by content_id
 2. **Discovery Mirror** - Syncs vehicle service registry to PostgreSQL
 3. **Scheduler Mirror** - Syncs scheduled job state to PostgreSQL
-4. **RPC Gateway** - Enables cloud→vehicle method invocation
+4. **Cloud APIs** - gRPC services for discovery, dispatcher, and scheduler
 
 ## Architecture
 
 ```
-MQTT (v2c/#) → mqtt_kafka_bridge → Kafka → {discovery,scheduler,rpc}_mirror → PostgreSQL
+MQTT (v2c/#) → mqtt_kafka_bridge → Kafka → {discovery,scheduler}_mirror → PostgreSQL
 ```
 
 Content ID routing:
@@ -38,7 +38,6 @@ make -j
 ./mqtt_kafka_bridge --mqtt_host=localhost --kafka_broker=localhost:9092
 ./discovery_mirror --kafka_broker=localhost:9092 --postgres_host=localhost
 ./scheduler_mirror --kafka_broker=localhost:9092 --postgres_host=localhost
-./rpc_gateway --kafka_broker=localhost:9092 --postgres_host=localhost
 ```
 
 ## Directory Structure
@@ -59,10 +58,14 @@ covesa-ifex-offboard-services/
 │   ├── postgres_client/      # libpq wrapper
 │   └── envelope_codec/       # Protobuf codecs
 └── services/
-    ├── mqtt_kafka_bridge/    # MQTT → Kafka router
-    ├── discovery_mirror/     # Service registry to PostgreSQL
-    ├── scheduler_mirror/     # Job state to PostgreSQL
-    └── rpc_gateway/          # RPC request/response tracking
+    ├── ingestion/            # Message ingestion services
+    │   ├── mqtt_kafka_bridge/  # MQTT → Kafka router
+    │   ├── discovery_mirror/   # Service registry to PostgreSQL
+    │   └── scheduler_mirror/   # Job state to PostgreSQL
+    └── api/                  # Cloud gRPC APIs
+        ├── discovery/          # Fleet service discovery API
+        ├── dispatcher/         # RPC dispatch to vehicles
+        └── scheduler/          # Job scheduling API
 ```
 
 ## Key Libraries
@@ -78,10 +81,12 @@ covesa-ifex-offboard-services/
 | Table | Purpose |
 |-------|---------|
 | `vehicles` | Known vehicles with first/last seen timestamps |
-| `services` | Service registry (from content_id=201) |
+| `vehicle_enrichment` | Fleet assignment, region, model metadata |
+| `services` | Service registry (legacy, from content_id=201) |
+| `schema_registry` | Deduplicated IFEX schemas by hash |
+| `vehicle_schemas` | Vehicle-to-schema junction table |
 | `jobs` | Scheduled jobs (from content_id=202) |
 | `job_executions` | Job execution history |
-| `rpc_requests` | Cloud→vehicle RPC tracking |
 | `sync_state` | Per-vehicle sync sequence/checksum |
 
 ## Dependencies
@@ -335,6 +340,74 @@ vehicle_services (
 ```
 
 See `docs/fleet-dashboard-spec.md` for full implementation details.
+
+## E2E Testing with Real Vehicles
+
+The E2E tests run real vehicle containers to verify the complete cloud→vehicle→cloud round-trip.
+
+### Prerequisites
+
+**1. Build the vehicle Docker image (in covesa-ifex-core):**
+```bash
+cd ../covesa-ifex-core
+./build-test-container.sh
+```
+
+This builds `ifex-vehicle:latest` containing:
+- Discovery, Dispatcher, Scheduler, Backend Transport services
+- Sync bridges (discovery, scheduler, dispatcher)
+- Test services (echo, beverage, climate-comfort, defrost)
+
+**IMPORTANT:** Rebuild the container whenever you change vehicle-side code!
+
+**2. Start infrastructure:**
+```bash
+./deploy/start-infra.sh
+```
+
+### Running E2E Tests
+
+```bash
+# Build with tests
+cmake -B build -DBUILD_TESTS=ON && cmake --build build
+
+# Run all E2E tests
+ctest --test-dir build -L e2e --output-on-failure
+
+# Run specific suite
+ctest --test-dir build -R dispatcher_e2e
+ctest --test-dir build -R scheduler_e2e
+ctest --test-dir build -R discovery_e2e
+ctest --test-dir build -R status_e2e
+```
+
+### What the E2E Tests Verify
+
+| Test Suite | Verifies |
+|------------|----------|
+| `dispatcher_e2e` | RPC round-trip: cloud API → Kafka → MQTT → vehicle echo service → response |
+| `scheduler_e2e` | Job creation, trigger, execution on vehicle, result sync back |
+| `discovery_e2e` | Service registry sync from vehicle to cloud |
+| `status_e2e` | Vehicle online/offline status via MQTT LWT |
+
+### Test Architecture
+
+```
+E2E Test Process
+    │
+    ├─ SetUpTestSuite()
+    │   ├─ Verify Docker infra (postgres, kafka, mosquitto)
+    │   ├─ Start mqtt_kafka_bridge
+    │   ├─ Start discovery_mirror, scheduler_mirror
+    │   ├─ Start ifex-vehicle Docker container
+    │   ├─ Wait for vehicle online + echo_service registered
+    │   └─ Start cloud API service being tested
+    │
+    ├─ Run tests (real vehicle responses)
+    │
+    └─ TearDownTestSuite()
+        └─ Stop all services and clean up
+```
 
 ## Fleet Dashboard
 

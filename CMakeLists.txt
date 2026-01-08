@@ -14,6 +14,7 @@ find_package(Protobuf REQUIRED)
 find_package(gRPC CONFIG QUIET)
 find_package(glog REQUIRED)
 find_package(gflags REQUIRED)
+find_package(nlohmann_json REQUIRED)
 
 # Find librdkafka
 pkg_check_modules(RDKAFKA REQUIRED rdkafka++)
@@ -106,11 +107,10 @@ target_link_libraries(postgres_client PUBLIC
 )
 
 # Envelope codec library
+# Note: discovery_codec and discovery_offboard_codec removed - discovery uses passthrough
 add_library(envelope_codec STATIC
-    libs/envelope_codec/src/discovery_codec.cpp
     libs/envelope_codec/src/scheduler_codec.cpp
     libs/envelope_codec/src/rpc_codec.cpp
-    libs/envelope_codec/src/discovery_offboard_codec.cpp
     libs/envelope_codec/src/scheduler_offboard_codec.cpp
     libs/envelope_codec/src/rpc_offboard_codec.cpp
 )
@@ -189,9 +189,11 @@ target_include_directories(discovery_mirror PRIVATE
 target_link_libraries(discovery_mirror PRIVATE
     kafka_client
     postgres_client
-    envelope_codec
+    ifex_offboard_proto
     glog::glog
     gflags
+    yaml-cpp
+    nlohmann_json::nlohmann_json
 )
 
 # Scheduler Mirror service
@@ -210,21 +212,9 @@ target_link_libraries(scheduler_mirror PRIVATE
     gflags
 )
 
-# RPC Gateway service
-add_executable(rpc_gateway
-    services/ingestion/rpc_gateway/main.cpp
-    services/ingestion/rpc_gateway/rpc_store.cpp
-)
-target_include_directories(rpc_gateway PRIVATE
-    services/ingestion/rpc_gateway
-)
-target_link_libraries(rpc_gateway PRIVATE
-    kafka_client
-    postgres_client
-    envelope_codec
-    glog::glog
-    gflags
-)
+# RPC Gateway service - REMOVED
+# RPCs are now ephemeral (in-memory tracking in dispatcher_api)
+# The rpc_gateway was designed to persist RPCs to PostgreSQL but this is no longer needed
 
 # =============================================================================
 # API Services (Cloud gRPC APIs)
@@ -259,14 +249,12 @@ add_executable(dispatcher_api
 )
 target_include_directories(dispatcher_api PRIVATE
     services/api/dispatcher
-    libs/postgres_client/include
     libs/grpc_service_base/include
     libs/envelope_codec/include
     ${RDKAFKA_INCLUDE_DIRS}
 )
 target_link_libraries(dispatcher_api PRIVATE
     grpc_service_base
-    postgres_client
     envelope_codec
     ifex_offboard_proto
     ${RDKAFKA_LIBRARIES}
@@ -325,7 +313,6 @@ install(TARGETS
     mqtt_kafka_bridge
     discovery_mirror
     scheduler_mirror
-    rpc_gateway
     # API
     discovery_api
     dispatcher_api
