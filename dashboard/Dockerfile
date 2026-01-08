@@ -9,7 +9,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application
 COPY fleet_api.py .
 COPY fleet_dashboard.html .
-COPY service_schemas.json .
 
 # PostgreSQL defaults
 ENV POSTGRES_HOST=postgres
