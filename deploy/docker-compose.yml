@@ -14,7 +14,10 @@ services:
       POSTGRES_USER: ifex
       POSTGRES_PASSWORD: ifex_dev
     volumes:
-      - ./init-db:/docker-entrypoint-initdb.d:ro
+      # Schema from canonical location (single source of truth)
+      - ../sql/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+      # Seed data for development/testing
+      - ./init-db/02-seed-data.sql:/docker-entrypoint-initdb.d/02-seed-data.sql:ro
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ifex -d ifex_offboard"]
@@ -117,7 +120,7 @@ services:
       context: ..
       dockerfile: deploy/Dockerfile.cloud-services
       args:
-        SERVICE: cloud_discovery
+        SERVICE: discovery_api
     container_name: ifex-cloud-discovery
     depends_on:
       postgres:
@@ -132,7 +135,7 @@ services:
       POSTGRES_USER: ifex
       POSTGRES_PASSWORD: ifex_dev
     command: >
-      /usr/local/bin/cloud_discovery
+      /usr/local/bin/discovery_api
       --grpc_listen=0.0.0.0:50081
       --postgres_host=postgres
       --postgres_port=5432
@@ -148,7 +151,7 @@ services:
       context: ..
       dockerfile: deploy/Dockerfile.cloud-services
       args:
-        SERVICE: cloud_dispatcher
+        SERVICE: dispatcher_api
     container_name: ifex-cloud-dispatcher
     depends_on:
       postgres:
@@ -166,7 +169,7 @@ services:
       POSTGRES_USER: ifex
       POSTGRES_PASSWORD: ifex_dev
     command: >
-      /usr/local/bin/cloud_dispatcher
+      /usr/local/bin/dispatcher_api
       --grpc_listen=0.0.0.0:50082
       --kafka_broker=kafka:29092
       --kafka_topic_c2v=ifex.c2v.rpc
@@ -185,7 +188,7 @@ services:
       context: ..
       dockerfile: deploy/Dockerfile.cloud-services
       args:
-        SERVICE: cloud_scheduler
+        SERVICE: scheduler_api
     container_name: ifex-cloud-scheduler
     depends_on:
       postgres:
@@ -203,7 +206,7 @@ services:
       POSTGRES_USER: ifex
       POSTGRES_PASSWORD: ifex_dev
     command: >
-      /usr/local/bin/cloud_scheduler
+      /usr/local/bin/scheduler_api
       --grpc_listen=0.0.0.0:50083
       --kafka_broker=kafka:29092
       --kafka_topic_c2v=ifex.c2v.scheduler

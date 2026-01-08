@@ -36,7 +36,7 @@ if [ ! -d "$BUILD_DIR" ]; then
 fi
 
 # Check required binaries
-REQUIRED_BINS="mqtt_kafka_bridge discovery_mirror scheduler_mirror rpc_gateway enrichment_exporter"
+REQUIRED_BINS="mqtt_kafka_bridge discovery_mirror scheduler_mirror enrichment_exporter dispatcher_api discovery_api scheduler_api"
 for bin in $REQUIRED_BINS; do
     if [ ! -x "$BUILD_DIR/$bin" ]; then
         log_error "Binary not found: $BUILD_DIR/$bin"
@@ -80,7 +80,7 @@ docker-compose exec -T kafka /opt/kafka/bin/kafka-topics.sh \
 # Step 4: Populate PostgreSQL with test data
 log_info "Populating PostgreSQL with $NUM_VEHICLES vehicles..."
 docker-compose exec -T postgres psql -U ifex -d ifex_offboard -q <<EOF
-TRUNCATE vehicles, vehicle_enrichment, services, jobs, job_executions, rpc_requests, sync_state CASCADE;
+TRUNCATE vehicles, vehicle_enrichment, vehicle_schemas, schema_registry, jobs, job_executions, sync_state, offboard_calendar CASCADE;
 
 CREATE OR REPLACE FUNCTION generate_vin(seq INTEGER) RETURNS VARCHAR AS \$\$
 BEGIN
@@ -140,14 +140,35 @@ log_info "  discovery_mirror started (PID: $!)"
 echo $! > /tmp/ifex-pids/scheduler_mirror.pid
 log_info "  scheduler_mirror started (PID: $!)"
 
-"$BUILD_DIR/rpc_gateway" \
-    --kafka_broker=localhost:9092 \
-    --postgres_host=localhost \
-    > /tmp/ifex-logs/rpc_gateway.log 2>&1 &
-echo $! > /tmp/ifex-pids/rpc_gateway.pid
-log_info "  rpc_gateway started (PID: $!)"
+# Step 7: Start Cloud API services
+log_info "Starting Cloud API services..."
 
-# Step 7: Start MQTT-Kafka bridge
+"$BUILD_DIR/dispatcher_api" \
+    --kafka_broker=localhost:9092 \
+    --mqtt_host=localhost \
+    --postgres_host=localhost \
+    --listen=0.0.0.0:50100 \
+    > /tmp/ifex-logs/dispatcher_api.log 2>&1 &
+echo $! > /tmp/ifex-pids/dispatcher_api.pid
+log_info "  dispatcher_api started (PID: $!, port 50100)"
+
+"$BUILD_DIR/discovery_api" \
+    --postgres_host=localhost \
+    --listen=0.0.0.0:50101 \
+    > /tmp/ifex-logs/discovery_api.log 2>&1 &
+echo $! > /tmp/ifex-pids/discovery_api.pid
+log_info "  discovery_api started (PID: $!, port 50101)"
+
+"$BUILD_DIR/scheduler_api" \
+    --kafka_broker=localhost:9092 \
+    --mqtt_host=localhost \
+    --postgres_host=localhost \
+    --listen=0.0.0.0:50102 \
+    > /tmp/ifex-logs/scheduler_api.log 2>&1 &
+echo $! > /tmp/ifex-pids/scheduler_api.pid
+log_info "  scheduler_api started (PID: $!, port 50102)"
+
+# Step 8: Start MQTT-Kafka bridge
 log_info "Starting MQTT-Kafka bridge..."
 "$BUILD_DIR/mqtt_kafka_bridge" \
     --kafka_broker=localhost:9092 \
@@ -172,11 +193,17 @@ echo "Services:"
 echo "  - PostgreSQL:        localhost:5432 (ifex_offboard)"
 echo "  - Kafka:             localhost:9092"
 echo "  - Mosquitto:         localhost:1883"
-echo "  - Fleet Dashboard:   http://localhost:8000/"
+echo "  - Fleet Dashboard:   http://localhost:5000/"
+echo ""
+echo "Cloud APIs (gRPC):"
+echo "  - Dispatcher API:    localhost:50100"
+echo "  - Discovery API:     localhost:50101"
+echo "  - Scheduler API:     localhost:50102"
+echo ""
+echo "Background Services:"
 echo "  - MQTT-Kafka Bridge: running"
 echo "  - Discovery Mirror:  running"
 echo "  - Scheduler Mirror:  running"
-echo "  - RPC Gateway:       running"
 echo ""
 echo "Logs: /tmp/ifex-logs/"
 echo "Stop: ./stop-infra.sh"

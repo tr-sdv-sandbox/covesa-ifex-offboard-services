@@ -12,9 +12,10 @@ RUN apt-get update && apt-get install -y \
     librdkafka-dev \
     libpq-dev \
     libpaho-mqttpp-dev \
-    libpaho-mqtt3as-dev \
+    libpaho-mqtt-dev \
     libgoogle-glog-dev \
     libgflags-dev \
+    libyaml-cpp-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
@@ -22,7 +23,7 @@ COPY . .
 
 RUN mkdir -p build && cd build && \
     cmake .. -DCMAKE_BUILD_TYPE=Release && \
-    make -j$(nproc) cloud_discovery cloud_dispatcher cloud_scheduler
+    make -j$(nproc) discovery_api dispatcher_api scheduler_api
 
 # Runtime stage
 FROM ubuntu:24.04
@@ -32,18 +33,19 @@ RUN apt-get update && apt-get install -y \
     libgrpc++1.51t64 \
     librdkafka1 \
     libpq5 \
-    libpaho-mqttpp3-1t64 \
-    libpaho-mqtt3as1t64 \
+    libpaho-mqttpp3-1 \
+    libpaho-mqtt1.3 \
     libgoogle-glog0v6t64 \
     libgflags2.2 \
+    libyaml-cpp0.8 \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /build/build/cloud_discovery /usr/local/bin/
-COPY --from=builder /build/build/cloud_dispatcher /usr/local/bin/
-COPY --from=builder /build/build/cloud_scheduler /usr/local/bin/
+COPY --from=builder /build/build/discovery_api /usr/local/bin/
+COPY --from=builder /build/build/dispatcher_api /usr/local/bin/
+COPY --from=builder /build/build/scheduler_api /usr/local/bin/
 
-# Default to cloud_discovery, can be overridden
-ARG SERVICE=cloud_discovery
+# Default to discovery_api, can be overridden
+ARG SERVICE=discovery_api
 ENV SERVICE_NAME=${SERVICE}
 
 ENTRYPOINT ["/bin/sh", "-c", "/usr/local/bin/${SERVICE_NAME}"]

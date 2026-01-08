@@ -117,13 +117,13 @@ sleep 5
 # Step 7: Verify simulation
 log_info "Verifying simulation..."
 
-# Count registered services
+# Count vehicles with registered services (using vehicle_schemas)
 SERVICE_COUNT=$(docker-compose exec -T postgres psql -U ifex -d ifex_offboard -t -c \
-    "SELECT COUNT(DISTINCT vehicle_id) FROM services;" 2>/dev/null | tr -d ' ')
+    "SELECT COUNT(DISTINCT vehicle_id) FROM vehicle_schemas;" 2>/dev/null | tr -d ' ')
 
-# Count vehicles with enrichment
+# Count vehicles with enrichment that have services
 ENRICHED_COUNT=$(docker-compose exec -T postgres psql -U ifex -d ifex_offboard -t -c \
-    "SELECT COUNT(*) FROM vehicle_enrichment WHERE vehicle_id IN (SELECT DISTINCT vehicle_id FROM services);" 2>/dev/null | tr -d ' ')
+    "SELECT COUNT(*) FROM vehicle_enrichment WHERE vehicle_id IN (SELECT DISTINCT vehicle_id FROM vehicle_schemas);" 2>/dev/null | tr -d ' ')
 
 echo ""
 log_info "=== Simulation Ready ==="
@@ -133,11 +133,15 @@ echo "  - PostgreSQL:    localhost:5432"
 echo "  - Kafka:         localhost:9092"
 echo "  - Mosquitto:     localhost:1883"
 echo ""
-echo "Offboard Services:"
+echo "Cloud APIs (gRPC):"
+echo "  - Dispatcher API:     localhost:50100"
+echo "  - Discovery API:      localhost:50101"
+echo "  - Scheduler API:      localhost:50102"
+echo ""
+echo "Background Services:"
 echo "  - MQTT-Kafka Bridge:  running"
 echo "  - Discovery Mirror:   running"
 echo "  - Scheduler Mirror:   running"
-echo "  - RPC Gateway:        running"
 echo ""
 echo "Vehicles:"
 echo "  - Containers:    $NUM_VEHICLES"

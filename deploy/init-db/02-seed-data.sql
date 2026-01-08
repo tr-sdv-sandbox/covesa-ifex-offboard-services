@@ -178,33 +178,6 @@ SELECT
 FROM vehicles;
 
 -- =============================================================================
--- Insert some sample RPC requests (100 total)
--- =============================================================================
-INSERT INTO rpc_requests (
-    correlation_id, vehicle_id, service_name, method_name,
-    parameters_json, timeout_ms, request_timestamp_ns,
-    response_status, result_json, error_message, duration_ms, responded_at
-)
-SELECT
-    'rpc-' || uuid_generate_v4()::TEXT as correlation_id,
-    v.vehicle_id,
-    (ARRAY['climate.hvac', 'diagnostics.obd', 'telematics.fleet'])[1 + (r.idx % 3)] as service_name,
-    (ARRAY['get_status', 'run_diagnostics', 'upload_data'])[1 + (r.idx % 3)] as method_name,
-    '{"verbose": true}' as parameters_json,
-    (5000 + floor(random() * 25000))::INTEGER as timeout_ms,
-    EXTRACT(EPOCH FROM NOW() - (r.idx || ' minutes')::interval)::BIGINT * 1000000000 as request_timestamp_ns,
-    CASE WHEN random() > 0.1 THEN 'SUCCESS' ELSE 'FAILED' END as response_status,
-    CASE WHEN random() > 0.1
-        THEN '{"result": "ok", "data": {"temperature": ' || (15 + floor(random() * 15))::int || '}}'
-        ELSE NULL
-    END as result_json,
-    CASE WHEN random() > 0.9 THEN 'Service unavailable' ELSE NULL END as error_message,
-    (50 + floor(random() * 500))::INTEGER as duration_ms,
-    CASE WHEN random() > 0.05 THEN NOW() - ((r.idx - 1) || ' minutes')::interval ELSE NULL END as responded_at
-FROM (SELECT vehicle_id FROM vehicles ORDER BY random() LIMIT 50) v
-CROSS JOIN generate_series(1, 2) as r(idx);
-
--- =============================================================================
 -- Summary statistics
 -- =============================================================================
 DO $$
@@ -213,20 +186,17 @@ DECLARE
     s_count INTEGER;
     j_count INTEGER;
     e_count INTEGER;
-    r_count INTEGER;
 BEGIN
     SELECT COUNT(*) INTO v_count FROM vehicles;
     SELECT COUNT(*) INTO s_count FROM services;
     SELECT COUNT(*) INTO j_count FROM jobs;
     SELECT COUNT(*) INTO e_count FROM job_executions;
-    SELECT COUNT(*) INTO r_count FROM rpc_requests;
 
     RAISE NOTICE '=== Seed Data Summary ===';
     RAISE NOTICE 'Vehicles:        %', v_count;
     RAISE NOTICE 'Services:        %', s_count;
     RAISE NOTICE 'Jobs:            %', j_count;
     RAISE NOTICE 'Job Executions:  %', e_count;
-    RAISE NOTICE 'RPC Requests:    %', r_count;
     RAISE NOTICE '=========================';
 END $$;
 
