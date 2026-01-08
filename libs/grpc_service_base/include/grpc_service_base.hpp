@@ -106,6 +106,7 @@ private:
     std::vector<grpc::Service*> services_;
     std::string bound_address_;
     std::atomic<bool> running_{false};
+    std::atomic<bool> shutdown_requested_{false};
     std::function<void()> shutdown_callback_;
 
     static std::atomic<GrpcServiceBase*> active_instance_;

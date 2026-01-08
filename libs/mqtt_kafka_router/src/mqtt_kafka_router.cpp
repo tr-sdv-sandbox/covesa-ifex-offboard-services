@@ -447,15 +447,20 @@ void MqttKafkaRouter::process_message(const TopicInfo& info,
         }
     }
 
-    // Transform the message
+    // Transform the message (or passthrough if no transform function)
     std::optional<std::string> transformed;
-    try {
-        transformed = handler.transform(info.vehicle_id, info.content_id, payload, ctx);
-    } catch (const std::exception& e) {
-        LOG(ERROR) << "Transform error for vehicle=" << info.vehicle_id
-                   << " content_id=" << info.content_id << ": " << e.what();
-        stats_.transform_errors++;
-        return;
+    if (handler.transform) {
+        try {
+            transformed = handler.transform(info.vehicle_id, info.content_id, payload, ctx);
+        } catch (const std::exception& e) {
+            LOG(ERROR) << "Transform error for vehicle=" << info.vehicle_id
+                       << " content_id=" << info.content_id << ": " << e.what();
+            stats_.transform_errors++;
+            return;
+        }
+    } else {
+        // Passthrough: use payload as-is
+        transformed = payload;
     }
 
     if (!transformed) {

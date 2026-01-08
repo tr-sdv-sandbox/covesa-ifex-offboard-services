@@ -2,6 +2,7 @@
 
 #include <csignal>
 #include <chrono>
+#include <thread>
 
 #include <glog/logging.h>
 #include <grpcpp/ext/proto_server_reflection_plugin.h>
@@ -13,10 +14,15 @@ namespace cloud {
 std::atomic<GrpcServiceBase*> GrpcServiceBase::active_instance_{nullptr};
 
 void GrpcServiceBase::signal_handler(int signum) {
-    LOG(INFO) << "Received signal " << signum << ", initiating shutdown...";
+    // Don't call shutdown directly from signal handler - it causes deadlock
+    // because we're on the same thread that's blocked in Wait()
     GrpcServiceBase* instance = active_instance_.load();
-    if (instance) {
-        instance->shutdown();
+    if (instance && !instance->shutdown_requested_.exchange(true)) {
+        // Spawn detached thread to perform shutdown
+        std::thread([instance, signum]() {
+            LOG(INFO) << "Received signal " << signum << ", initiating shutdown...";
+            instance->shutdown();
+        }).detach();
     }
 }
 

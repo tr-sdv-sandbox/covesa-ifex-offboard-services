@@ -22,9 +22,6 @@ std::string PostgresRow::get_string(const std::string& col_name) const {
 }
 
 int PostgresRow::get_int(int col) const {
-    if (PQgetisnull(result_, row_, col)) {
-        return 0;
-    }
     return std::stoi(PQgetvalue(result_, row_, col));
 }
 
@@ -33,9 +30,6 @@ int PostgresRow::get_int(const std::string& col_name) const {
 }
 
 int64_t PostgresRow::get_int64(int col) const {
-    if (PQgetisnull(result_, row_, col)) {
-        return 0;
-    }
     return std::stoll(PQgetvalue(result_, row_, col));
 }
 
