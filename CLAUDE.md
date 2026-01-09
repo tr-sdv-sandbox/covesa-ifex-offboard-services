@@ -6,15 +6,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 IFEX Offboard Services is a cloud-side component for managing vehicle fleets using the COVESA IFEX standard. It provides:
 
-1. **MQTT→Kafka Bridge** - Routes vehicle messages to Kafka topics by content_id
-2. **Discovery Mirror** - Syncs vehicle service registry to PostgreSQL
+1. **MQTT→Kafka Bridge** - Routes vehicle messages to Kafka topics by content_id, tracks vehicle online/offline status
+2. **Discovery Mirror** - Syncs vehicle service registry to PostgreSQL with hash-based deduplication
 3. **Scheduler Mirror** - Syncs scheduled job state to PostgreSQL
 4. **Cloud APIs** - gRPC services for discovery, dispatcher, and scheduler
+5. **Enrichment Exporter** - Exports vehicle metadata to Kafka for bridge consumption
+6. **Fleet Dashboard** - Web UI for fleet management
 
 ## Architecture
 
 ```
-MQTT (v2c/#) → mqtt_kafka_bridge → Kafka → {discovery,scheduler}_mirror → PostgreSQL
+Vehicle (MQTT) → mqtt_kafka_bridge → Kafka → {discovery,scheduler}_mirror → PostgreSQL
+                      ↑                                                           ↓
+              enrichment_exporter ←─────────────── vehicle_enrichment ←─── Cloud APIs
 ```
 
 Content ID routing:
@@ -25,48 +29,49 @@ Content ID routing:
 ## Build Commands
 
 ```bash
-# Start infrastructure (Docker)
-cd docker
-docker compose up -d
+# Install dependencies (Ubuntu 24.04)
+./install_deps.sh
 
-# Build services
+# Start infrastructure (Docker)
+cd deploy && docker compose up -d
+
+# Build
 mkdir build && cd build
 cmake .. -DCMAKE_BUILD_TYPE=Debug
 make -j
 
-# Run individual service
-./mqtt_kafka_bridge --mqtt_host=localhost --kafka_broker=localhost:9092
-./discovery_mirror --kafka_broker=localhost:9092 --postgres_host=localhost
-./scheduler_mirror --kafka_broker=localhost:9092 --postgres_host=localhost
+# Build with tests
+cmake .. -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTS=ON && make -j
+
+# Run all tests
+ctest --output-on-failure
+
+# Run specific test suite
+ctest -R scheduler_e2e --output-on-failure
+ctest -L e2e --output-on-failure    # All E2E tests
+
+# Run single test binary directly
+./tests/scheduler_command_test
 ```
 
-## Directory Structure
+## Quick Start
 
+```bash
+# Full infrastructure startup (builds, populates DB, starts all services)
+./deploy/start-infra.sh [num_vehicles]    # Default: 100000 vehicles
+./deploy/stop-infra.sh                    # Stop all services
+
+# Logs location
+/tmp/ifex-logs/{mqtt_kafka_bridge,discovery_mirror,scheduler_mirror,...}.log
 ```
-covesa-ifex-offboard-services/
-├── docker/
-│   ├── docker-compose.yml    # Mosquitto, Kafka, PostgreSQL
-│   └── mosquitto.conf
-├── sql/
-│   └── schema.sql            # PostgreSQL schema
-├── proto/                    # Copied from covesa-ifex-core
-│   ├── dispatcher-rpc-envelope.proto
-│   ├── discovery-sync-envelope.proto
-│   └── scheduler-sync-envelope.proto
-├── libs/
-│   ├── kafka_client/         # librdkafka wrapper
-│   ├── postgres_client/      # libpq wrapper
-│   └── envelope_codec/       # Protobuf codecs
-└── services/
-    ├── ingestion/            # Message ingestion services
-    │   ├── mqtt_kafka_bridge/  # MQTT → Kafka router
-    │   ├── discovery_mirror/   # Service registry to PostgreSQL
-    │   └── scheduler_mirror/   # Job state to PostgreSQL
-    └── api/                  # Cloud gRPC APIs
-        ├── discovery/          # Fleet service discovery API
-        ├── dispatcher/         # RPC dispatch to vehicles
-        └── scheduler/          # Job scheduling API
-```
+
+## Cloud API Services (gRPC)
+
+| Service | Default Port | Purpose |
+|---------|-------------|---------|
+| `dispatcher_api` | 50100 | Execute RPCs on vehicle services |
+| `discovery_api` | 50101 | Query fleet service registry |
+| `scheduler_api` | 50102 | Create/manage scheduled jobs |
 
 ## Key Libraries
 
@@ -75,37 +80,25 @@ covesa-ifex-offboard-services/
 | `kafka_client` | KafkaProducer/KafkaConsumer wrappers for librdkafka |
 | `postgres_client` | PostgresClient wrapper for libpq with result iteration |
 | `envelope_codec` | Decode/encode protobuf sync envelopes |
+| `mqtt_kafka_router` | MQTT subscription, content_id routing, vehicle context |
+| `grpc_service_base` | Common gRPC server setup for cloud APIs |
 
 ## PostgreSQL Tables
 
 | Table | Purpose |
 |-------|---------|
-| `vehicles` | Known vehicles with first/last seen timestamps |
+| `vehicles` | Known vehicles with `is_online`, `last_seen_at` |
 | `vehicle_enrichment` | Fleet assignment, region, model metadata |
-| `services` | Service registry (legacy, from content_id=201) |
-| `schema_registry` | Deduplicated IFEX schemas by hash |
+| `schema_registry` | Deduplicated IFEX schemas by SHA-256 hash |
 | `vehicle_schemas` | Vehicle-to-schema junction table |
 | `jobs` | Scheduled jobs (from content_id=202) |
 | `job_executions` | Job execution history |
+| `offboard_calendar` | Cloud-side jobs pending sync to vehicles |
 | `sync_state` | Per-vehicle sync sequence/checksum |
-
-## Dependencies
-
-**System packages:**
-- librdkafka-dev (Kafka C++ client)
-- libpq-dev (PostgreSQL C client)
-- libpaho-mqttcpp-dev (MQTT C++ client)
-- protobuf-compiler, libprotobuf-dev
-- libglog-dev, libgflags-dev
-
-**Docker images:**
-- eclipse-mosquitto:2
-- confluentinc/cp-kafka:7.5.0
-- confluentinc/cp-zookeeper:7.5.0
-- postgres:16
 
 ## Code Conventions
 
+- **C++ Standard:** C++17
 - **Namespace:** `ifex::offboard`
 - **Logging:** glog (`LOG(INFO)`, `VLOG(1)`)
 - **CLI flags:** gflags
@@ -122,6 +115,22 @@ covesa-ifex-offboard-services/
 | POSTGRES_DB | ifex_offboard | Database name |
 | POSTGRES_USER | ifex | Database user |
 | POSTGRES_PASSWORD | ifex_dev | Database password |
+
+## Debugging
+
+```bash
+# View service logs
+tail -f /tmp/ifex-logs/mqtt_kafka_bridge.log
+
+# Query database
+./deploy/query-db.sh "SELECT vehicle_id, is_online FROM vehicles WHERE is_online = true LIMIT 10"
+
+# Monitor MQTT
+mosquitto_sub -h localhost -t 'v2c/#' -v
+
+# Kafka topics
+docker exec ifex-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:29092 --list
+```
 
 ## Offline Vehicle Command Delivery
 
