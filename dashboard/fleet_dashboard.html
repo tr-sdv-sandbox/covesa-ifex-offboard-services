@@ -767,80 +767,6 @@
             </div>
         </div>
 
-        <!-- RPC and Scheduler Panels -->
-        <div class="panels">
-            <!-- RPC Dispatch Panel -->
-            <div class="panel">
-                <div class="panel-header">
-                    <span>RPC Dispatch</span>
-                    <span class="badge" id="mqtt-status">MQTT: --</span>
-                </div>
-                <div class="panel-body" style="padding: 1rem;">
-                    <form id="rpc-form" onsubmit="return dispatchRpc(event)">
-                        <div class="form-group">
-                            <label>Vehicle ID</label>
-                            <input type="text" id="rpc-vehicle" placeholder="VIN00000000000001" required>
-                        </div>
-                        <div class="form-row">
-                            <div class="form-group">
-                                <label>Service</label>
-                                <input type="text" id="rpc-service" placeholder="echo_service" required>
-                            </div>
-                            <div class="form-group">
-                                <label>Method</label>
-                                <input type="text" id="rpc-method" placeholder="echo" required>
-                            </div>
-                        </div>
-                        <div class="form-group">
-                            <label>Parameters (JSON)</label>
-                            <textarea id="rpc-params" rows="2" placeholder='{"message": "hello"}'>{}</textarea>
-                        </div>
-                        <button type="submit" class="btn primary">Send RPC</button>
-                    </form>
-                    <div id="rpc-result" style="margin-top: 1rem; display: none;"></div>
-                </div>
-            </div>
-
-            <!-- Scheduler Panel -->
-            <div class="panel">
-                <div class="panel-header">
-                    <span>Schedule Job</span>
-                </div>
-                <div class="panel-body" style="padding: 1rem;">
-                    <form id="schedule-form" onsubmit="return scheduleJob(event)">
-                        <div class="form-group">
-                            <label>Vehicle ID</label>
-                            <input type="text" id="schedule-vehicle" placeholder="VIN00000000000001" required>
-                        </div>
-                        <div class="form-group">
-                            <label>Job Title</label>
-                            <input type="text" id="schedule-title" placeholder="Hourly check">
-                        </div>
-                        <div class="form-row">
-                            <div class="form-group">
-                                <label>Service</label>
-                                <input type="text" id="schedule-service" placeholder="climate_service" required>
-                            </div>
-                            <div class="form-group">
-                                <label>Method</label>
-                                <input type="text" id="schedule-method" placeholder="get_status" required>
-                            </div>
-                        </div>
-                        <div class="form-group">
-                            <label>Parameters (JSON)</label>
-                            <textarea id="schedule-params" rows="2" placeholder='{}'>{}</textarea>
-                        </div>
-                        <div class="form-group">
-                            <label>Recurrence (iCal RRULE, optional)</label>
-                            <input type="text" id="schedule-recurrence" placeholder="FREQ=HOURLY;INTERVAL=1">
-                        </div>
-                        <button type="submit" class="btn primary">Schedule Job</button>
-                    </form>
-                    <div id="schedule-result" style="margin-top: 1rem; display: none;"></div>
-                </div>
-            </div>
-        </div>
-
         <!-- Region and Services Panels -->
         <div class="panels">
             <div class="panel">
@@ -1269,130 +1195,6 @@
         });
 
         // ===========================================
-        // RPC Functions
-        // ===========================================
-
-        async function dispatchRpc(event) {
-            event.preventDefault();
-
-            const vehicleId = document.getElementById('rpc-vehicle').value;
-            const serviceName = document.getElementById('rpc-service').value;
-            const methodName = document.getElementById('rpc-method').value;
-            const paramsText = document.getElementById('rpc-params').value;
-            const resultDiv = document.getElementById('rpc-result');
-
-            let parameters;
-            try {
-                parameters = JSON.parse(paramsText || '{}');
-            } catch (e) {
-                resultDiv.innerHTML = `<div class="result-box error">Invalid JSON parameters: ${e.message}</div>`;
-                resultDiv.style.display = 'block';
-                return false;
-            }
-
-            resultDiv.innerHTML = '<div class="result-box">Sending RPC...</div>';
-            resultDiv.style.display = 'block';
-
-            try {
-                const response = await fetch('/api/rpc', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        vehicle_id: vehicleId,
-                        service_name: serviceName,
-                        method_name: methodName,
-                        parameters: parameters,
-                        timeout_ms: 5000
-                    })
-                });
-
-                const data = await response.json();
-
-                if (response.ok) {
-                    resultDiv.innerHTML = `<div class="result-box success">RPC Dispatched!\n\nCorrelation ID: ${data.correlation_id}\nTopic: ${data.topic}\nStatus: ${data.status}</div>`;
-                } else {
-                    resultDiv.innerHTML = `<div class="result-box error">Error: ${data.error}</div>`;
-                }
-            } catch (err) {
-                resultDiv.innerHTML = `<div class="result-box error">Request failed: ${err.message}</div>`;
-            }
-
-            return false;
-        }
-
-        async function checkMqttStatus() {
-            try {
-                const response = await fetch('/api/health');
-                const data = await response.json();
-                const badge = document.getElementById('mqtt-status');
-                if (data.mqtt_connected) {
-                    badge.textContent = 'MQTT: Connected';
-                    badge.className = 'badge success';
-                } else {
-                    badge.textContent = 'MQTT: Disconnected';
-                    badge.className = 'badge';
-                }
-            } catch (err) {
-                document.getElementById('mqtt-status').textContent = 'MQTT: Unknown';
-            }
-        }
-
-        // ===========================================
-        // Scheduler Functions
-        // ===========================================
-
-        async function scheduleJob(event) {
-            event.preventDefault();
-
-            const vehicleId = document.getElementById('schedule-vehicle').value;
-            const title = document.getElementById('schedule-title').value;
-            const serviceName = document.getElementById('schedule-service').value;
-            const methodName = document.getElementById('schedule-method').value;
-            const paramsText = document.getElementById('schedule-params').value;
-            const recurrence = document.getElementById('schedule-recurrence').value;
-            const resultDiv = document.getElementById('schedule-result');
-
-            let parameters;
-            try {
-                parameters = JSON.parse(paramsText || '{}');
-            } catch (e) {
-                resultDiv.innerHTML = `<div class="result-box error">Invalid JSON parameters: ${e.message}</div>`;
-                resultDiv.style.display = 'block';
-                return false;
-            }
-
-            resultDiv.innerHTML = '<div class="result-box">Scheduling job...</div>';
-            resultDiv.style.display = 'block';
-
-            try {
-                const response = await fetch('/api/schedule', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        vehicle_id: vehicleId,
-                        title: title || `${serviceName}.${methodName}`,
-                        service_name: serviceName,
-                        method_name: methodName,
-                        parameters: parameters,
-                        recurrence_rule: recurrence
-                    })
-                });
-
-                const data = await response.json();
-
-                if (response.ok) {
-                    resultDiv.innerHTML = `<div class="result-box success">Job Scheduled!\n\nJob ID: ${data.job_id}\nTopic: ${data.topic}\nStatus: ${data.status}</div>`;
-                } else {
-                    resultDiv.innerHTML = `<div class="result-box error">Error: ${data.error}</div>`;
-                }
-            } catch (err) {
-                resultDiv.innerHTML = `<div class="result-box error">Request failed: ${err.message}</div>`;
-            }
-
-            return false;
-        }
-
-        // ===========================================
         // Initial load
         // ===========================================
         loadStats();
@@ -1400,11 +1202,9 @@
         loadRegions();
         loadFleets();
         loadVehicles();
-        checkMqttStatus();
 
         // Auto-refresh every 10 seconds
         setInterval(refreshAll, 10000);
-        setInterval(checkMqttStatus, 5000);
 
         // ===========================================
         // Tab Navigation
@@ -1690,23 +1490,48 @@
             }
         }
 
-        function openScheduleModal() {
-            // For now, use the existing schedule functionality
+        async function openScheduleModal() {
             const vehicleId = document.getElementById('service-vehicle').value;
             if (!vehicleId) {
                 alert('Please enter a target vehicle ID');
                 return;
             }
 
-            // Pre-fill the schedule form
-            document.getElementById('schedule-vehicle').value = vehicleId;
-            document.getElementById('schedule-service').value = selectedSchema.service_name;
-            document.getElementById('schedule-method').value = selectedMethod.name;
-            document.getElementById('schedule-params').value = JSON.stringify(getFormData(), null, 2);
+            // Build job data from current form
+            const params = document.getElementById('json-view').style.display === 'block'
+                ? JSON.parse(document.getElementById('service-params-json').value)
+                : getFormData();
 
-            // Switch to fleet tab and scroll to schedule form
-            switchTab('fleet');
-            document.querySelector('.panels').scrollIntoView({ behavior: 'smooth' });
+            const title = `${selectedSchema.service_name}.${selectedMethod.name}`;
+            const recurrence = prompt('Recurrence rule (iCal RRULE, optional):', '');
+
+            // Schedule via API
+            try {
+                const response = await fetch('/api/schedule', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        vehicle_id: vehicleId,
+                        title: title,
+                        service_name: selectedSchema.service_name,
+                        method_name: selectedMethod.name,
+                        parameters: params,
+                        recurrence_rule: recurrence || null
+                    })
+                });
+
+                const data = await response.json();
+                const resultDiv = document.getElementById('service-result');
+                resultDiv.style.display = 'block';
+
+                if (response.ok) {
+                    resultDiv.innerHTML = `<div class="result-box success">Job Scheduled!\nJob ID: ${data.job_id}</div>`;
+                } else {
+                    resultDiv.innerHTML = `<div class="result-box error">Error: ${data.error}</div>`;
+                }
+            } catch (err) {
+                alert('Error: ' + err.message);
+            }
         }
 
         // ===========================================
