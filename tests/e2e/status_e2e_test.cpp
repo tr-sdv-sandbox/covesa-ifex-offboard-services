@@ -31,8 +31,9 @@ using namespace ifex::offboard;
  */
 class StatusE2ETest : public ::testing::Test {
 protected:
+    // Use E2E isolated ports
     static constexpr const char* MQTT_HOST = "localhost";
-    static constexpr int MQTT_PORT = 1883;
+    static constexpr int MQTT_PORT = test::E2ETestInfrastructure::MQTT_PORT;  // E2E port: 11883
 
     static void SetUpTestSuite() {
         // Start shared E2E infrastructure (includes mqtt_kafka_bridge)
@@ -65,16 +66,17 @@ protected:
         // Generate unique vehicle ID for this test
         vehicle_id_ = "status-test-" + std::to_string(std::rand());
 
-        // Connect to PostgreSQL (required)
+        // Connect to PostgreSQL using E2E isolated port
         PostgresConfig pg_config;
         pg_config.host = "localhost";
+        pg_config.port = test::E2ETestInfrastructure::POSTGRES_PORT;  // E2E port: 15432
         pg_config.database = "ifex_offboard";
         pg_config.user = "ifex";
         pg_config.password = "ifex_dev";
 
         db_ = std::make_unique<PostgresClient>(pg_config);
         ASSERT_TRUE(db_->is_connected())
-            << "PostgreSQL not available";
+            << "PostgreSQL not available on E2E port";
 
         // Connect to MQTT (required)
         mosq_ = mosquitto_new("status-e2e-test", true, nullptr);

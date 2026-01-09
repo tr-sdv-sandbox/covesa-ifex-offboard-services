@@ -75,16 +75,16 @@ protected:
     }
 
     static void SetUpTestSuite() {
-        // Connect to PostgreSQL first
+        // Connect to PostgreSQL using E2E isolated ports
         ifex::offboard::PostgresConfig pg_config;
         pg_config.host = "localhost";
-        pg_config.port = 5432;
+        pg_config.port = E2ETestInfrastructure::POSTGRES_PORT;  // E2E port: 15432
         pg_config.database = "ifex_offboard";
         pg_config.user = "ifex";
         pg_config.password = "ifex_dev";
 
         db_ = std::make_unique<ifex::offboard::PostgresClient>(pg_config);
-        ASSERT_TRUE(db_->is_connected()) << "Failed to connect to PostgreSQL";
+        ASSERT_TRUE(db_->is_connected()) << "Failed to connect to PostgreSQL on E2E port";
 
         // Reset database schema for clean test state
         LOG(INFO) << "Resetting database schema...";
@@ -122,9 +122,10 @@ protected:
 
         LOG(INFO) << "Created test vehicles: " << VEHICLE_ID << ", " << VEHICLE_ID_2;
 
-        // Start discovery_api service
+        // Start discovery_api service with E2E isolated ports
         std::string binary_path = GetBinaryPath("discovery_api");
         std::string grpc_listen = std::string(DISCOVERY_API_HOST) + ":" + std::to_string(DISCOVERY_API_PORT);
+        std::string pg_port = std::to_string(E2ETestInfrastructure::POSTGRES_PORT);
 
         discovery_api_pid_ = fork();
         if (discovery_api_pid_ == 0) {
@@ -132,7 +133,7 @@ protected:
             execl(binary_path.c_str(), "discovery_api",
                   "--grpc_listen", grpc_listen.c_str(),
                   "--postgres_host", "localhost",
-                  "--postgres_port", "5432",
+                  "--postgres_port", pg_port.c_str(),
                   "--postgres_db", "ifex_offboard",
                   "--postgres_user", "ifex",
                   "--postgres_password", "ifex_dev",
@@ -700,15 +701,16 @@ protected:
             std::chrono::seconds(30)))
             << "Echo service did not register within 30 seconds";
 
-        // Start discovery_api
+        // Start discovery_api with E2E isolated ports
         std::string binary = ifex::offboard::test::E2ETestInfrastructure::GetBinaryPath("discovery_api");
+        std::string pg_port = std::to_string(ifex::offboard::test::E2ETestInfrastructure::POSTGRES_PORT);
 
         discovery_api_pid_ = fork();
         if (discovery_api_pid_ == 0) {
             execl(binary.c_str(), "discovery_api",
                   "--grpc_listen", DISCOVERY_ADDR,
                   "--postgres_host", "localhost",
-                  "--postgres_port", "5432",
+                  "--postgres_port", pg_port.c_str(),
                   "--postgres_db", "ifex_offboard",
                   "--postgres_user", "ifex",
                   "--postgres_password", "ifex_dev",

@@ -27,8 +27,10 @@
 #include "cloud-scheduler-service.grpc.pb.h"
 #include "scheduler-command-envelope.pb.h"
 #include "postgres_client.hpp"
+#include "e2e_test_fixture.hpp"
 
 namespace scheduler_grpc = ifex::cloud::scheduler;
+using ifex::offboard::test::E2ETestInfrastructure;
 namespace cmd_pb = swdv::scheduler_command_envelope;
 
 using namespace std::chrono_literals;
@@ -74,18 +76,17 @@ protected:
             glog_initialized = true;
         }
 
-        // Connect to PostgreSQL and create test vehicle
-        // This is a prerequisite - vehicles are normally created by status tracking
+        // Connect to PostgreSQL using E2E isolated ports
         ifex::offboard::PostgresConfig pg_config;
         pg_config.host = "localhost";
-        pg_config.port = 5432;
+        pg_config.port = E2ETestInfrastructure::POSTGRES_PORT;  // E2E port: 15432
         pg_config.database = "ifex_offboard";
         pg_config.user = "ifex";
         pg_config.password = "ifex_dev";
 
         db_ = std::make_unique<ifex::offboard::PostgresClient>(pg_config);
         ASSERT_TRUE(db_->is_connected())
-            << "PostgreSQL not available. Run: docker-compose up -d postgres";
+            << "PostgreSQL not available. Run E2E infrastructure or use docker-compose.e2e.yml";
 
         // Create test vehicle (normally done by mqtt_kafka_bridge on status update)
         auto result = db_->execute(R"(
@@ -98,18 +99,19 @@ protected:
         ASSERT_TRUE(result.ok()) << "Failed to create test vehicle: " << result.error();
         LOG(INFO) << "Created test vehicle: " << VEHICLE_ID;
 
-        // Start scheduler_api service
-        // Binary is in the same directory as the test executable
+        // Start scheduler_api service with E2E isolated ports
         std::string scheduler_path = GetBinaryPath("scheduler_api");
+        std::string kafka_broker = E2ETestInfrastructure::KAFKA_BROKER;
+        std::string pg_port = std::to_string(E2ETestInfrastructure::POSTGRES_PORT);
 
         scheduler_pid_ = fork();
         if (scheduler_pid_ == 0) {
             // Child process - exec scheduler_api
             execl(scheduler_path.c_str(), "scheduler_api",
                    "--grpc_listen=0.0.0.0:50083",
-                   "--kafka_broker=localhost:9092",
+                   ("--kafka_broker=" + kafka_broker).c_str(),
                    "--postgres_host=localhost",
-                   "--postgres_port=5432",
+                   ("--postgres_port=" + pg_port).c_str(),
                    "--postgres_db=ifex_offboard",
                    "--postgres_user=ifex",
                    "--postgres_password=ifex_dev",
@@ -953,16 +955,19 @@ protected:
             std::chrono::seconds(30)))
             << "Echo service did not register within 30 seconds";
 
-        // Start scheduler_api
+        // Start scheduler_api with E2E isolated ports
         std::string binary = ifex::offboard::test::E2ETestInfrastructure::GetBinaryPath("scheduler_api");
+        std::string kafka_broker = ifex::offboard::test::E2ETestInfrastructure::KAFKA_BROKER;
+        std::string pg_port = std::to_string(ifex::offboard::test::E2ETestInfrastructure::POSTGRES_PORT);
 
         scheduler_pid_ = fork();
         if (scheduler_pid_ == 0) {
             execl(binary.c_str(), "scheduler_api",
                   "--grpc_listen", SCHEDULER_ADDR,
-                  "--kafka_broker", "localhost:9092",
+                  "--kafka_broker", kafka_broker.c_str(),
+                  "--kafka_topic_c2v", "e2e.c2v.scheduler",  // E2E topic prefix
                   "--postgres_host", "localhost",
-                  "--postgres_port", "5432",
+                  "--postgres_port", pg_port.c_str(),
                   "--postgres_db", "ifex_offboard",
                   "--postgres_user", "ifex",
                   "--postgres_password", "ifex_dev",
