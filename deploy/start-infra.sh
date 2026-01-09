@@ -67,8 +67,17 @@ for i in {1..30}; do
     sleep 1
 done
 
-# Step 3: Create/reset enrichment topic
+# Step 3: Create Kafka topics
 log_info "Setting up Kafka topics..."
+
+# Create standard topics (if not exists)
+for topic in ifex.rpc.200 ifex.discovery.201 ifex.scheduler.202 ifex.c2v.rpc ifex.c2v.discovery ifex.c2v.scheduler ifex.status; do
+    docker-compose exec -T kafka /opt/kafka/bin/kafka-topics.sh \
+        --bootstrap-server localhost:29092 --create --if-not-exists --topic $topic \
+        --partitions 3 --replication-factor 1 2>/dev/null || true
+done
+
+# Enrichment topic needs compaction - recreate it fresh
 docker-compose exec -T kafka /opt/kafka/bin/kafka-topics.sh \
     --bootstrap-server localhost:29092 --delete --topic ifex.vehicle.enrichment 2>/dev/null || true
 sleep 1
@@ -76,6 +85,8 @@ docker-compose exec -T kafka /opt/kafka/bin/kafka-topics.sh \
     --bootstrap-server localhost:29092 --create --topic ifex.vehicle.enrichment \
     --partitions 3 --replication-factor 1 \
     --config cleanup.policy=compact 2>/dev/null || true
+
+log_info "Kafka topics created"
 
 # Step 4: Populate PostgreSQL with test data
 log_info "Populating PostgreSQL with $NUM_VEHICLES vehicles..."
