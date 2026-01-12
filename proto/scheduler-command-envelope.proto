@@ -39,23 +39,22 @@ message job_definition_t {
   string service = 3;
   string method = 4;
   string parameters_json = 5;
-  string scheduled_time = 6;
+  uint64 scheduled_time_ms = 6;
   string recurrence_rule = 7;
-  string end_time = 8;
-  string service_address = 9;
-  wake_policy_t wake_policy = 10;
-  sleep_policy_t sleep_policy = 11;
-  uint32 wake_lead_time_s = 12;
+  uint64 end_time_ms = 8;
+  wake_policy_t wake_policy = 9;
+  sleep_policy_t sleep_policy = 10;
+  uint32 wake_lead_time_s = 11;
 }
 
 // Partial job update - only specified fields are updated
 message job_update_t {
   string job_id = 1;
   string title = 2;
-  string scheduled_time = 3;
+  uint64 scheduled_time_ms = 3;
   string recurrence_rule = 4;
   string parameters_json = 5;
-  string end_time = 6;
+  uint64 end_time_ms = 6;
   wake_policy_t wake_policy = 7;
   sleep_policy_t sleep_policy = 8;
   uint32 wake_lead_time_s = 9;

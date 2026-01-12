@@ -9,20 +9,21 @@ from flask import Flask, jsonify, request, send_file
 from flask_cors import CORS
 import psycopg2
 import psycopg2.extras
-import paho.mqtt.client as mqtt
+import grpc
 import os
-import uuid
 import json
-import time
-import threading
 from datetime import datetime
+
+# Import generated gRPC stubs
+import sys
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'proto_gen'))
+from proto_gen import cloud_dispatcher_service_pb2 as dispatcher_pb2
+from proto_gen import cloud_dispatcher_service_pb2_grpc as dispatcher_grpc
+from proto_gen import cloud_scheduler_service_pb2 as scheduler_pb2
+from proto_gen import cloud_scheduler_service_pb2_grpc as scheduler_grpc
 
 app = Flask(__name__)
 CORS(app)
-
-# MQTT client for c2v publishing
-mqtt_client = None
-mqtt_connected = False
 
 # Database connection settings
 DB_HOST = os.getenv('POSTGRES_HOST', 'localhost')
@@ -31,43 +32,13 @@ DB_NAME = os.getenv('POSTGRES_DB', 'ifex_offboard')
 DB_USER = os.getenv('POSTGRES_USER', 'ifex')
 DB_PASSWORD = os.getenv('POSTGRES_PASSWORD', 'ifex_dev')
 
-# MQTT connection settings
-MQTT_HOST = os.getenv('MQTT_HOST', 'localhost')
-MQTT_PORT = int(os.getenv('MQTT_PORT', '1883'))
+# Dispatcher API gRPC connection
+DISPATCHER_HOST = os.getenv('DISPATCHER_HOST', 'localhost')
+DISPATCHER_PORT = int(os.getenv('DISPATCHER_PORT', '50100'))
 
-
-def on_mqtt_connect(client, userdata, flags, reason_code, properties):
-    """MQTT connection callback (paho-mqtt v2 API)"""
-    global mqtt_connected
-    if reason_code == 0:
-        mqtt_connected = True
-        print(f"Connected to MQTT broker at {MQTT_HOST}:{MQTT_PORT}")
-    else:
-        mqtt_connected = False
-        print(f"Failed to connect to MQTT: {reason_code}")
-
-
-def on_mqtt_disconnect(client, userdata, disconnect_flags, reason_code, properties):
-    """MQTT disconnect callback (paho-mqtt v2 API)"""
-    global mqtt_connected
-    mqtt_connected = False
-    print(f"Disconnected from MQTT: {reason_code}")
-
-
-def init_mqtt():
-    """Initialize MQTT client for c2v publishing"""
-    global mqtt_client
-    mqtt_client = mqtt.Client(
-        callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
-        client_id=f"fleet-dashboard-{uuid.uuid4().hex[:8]}"
-    )
-    mqtt_client.on_connect = on_mqtt_connect
-    mqtt_client.on_disconnect = on_mqtt_disconnect
-    try:
-        mqtt_client.connect(MQTT_HOST, MQTT_PORT, 60)
-        mqtt_client.loop_start()
-    except Exception as e:
-        print(f"Failed to connect to MQTT: {e}")
+# Scheduler API gRPC connection
+SCHEDULER_HOST = os.getenv('SCHEDULER_HOST', 'localhost')
+SCHEDULER_PORT = int(os.getenv('SCHEDULER_PORT', '50102'))
 
 
 def get_db_connection():
@@ -79,6 +50,12 @@ def get_db_connection():
         user=DB_USER,
         password=DB_PASSWORD
     )
+
+
+def get_scheduler_stub():
+    """Get a gRPC stub for the scheduler_api service"""
+    channel = grpc.insecure_channel(f'{SCHEDULER_HOST}:{SCHEDULER_PORT}')
+    return scheduler_grpc.CloudSchedulerServiceStub(channel), channel
 
 
 @app.route('/')
@@ -281,16 +258,18 @@ def get_services():
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
-    # Get unique services from schema_registry with vehicle counts
+    # Get unique services from schema_registry with actual vehicle counts
     cur.execute("""
         SELECT
             sr.service_name,
             sr.version,
             sr.schema_hash,
-            sr.schema_count as vehicle_count,
+            COUNT(DISTINCT vs.vehicle_id) as vehicle_count,
             sr.methods
         FROM schema_registry sr
-        ORDER BY sr.schema_count DESC, sr.service_name
+        LEFT JOIN vehicle_schemas vs ON sr.schema_hash = vs.schema_hash
+        GROUP BY sr.schema_hash, sr.service_name, sr.version, sr.methods
+        ORDER BY vehicle_count DESC, sr.service_name
     """)
     services = cur.fetchall()
 
@@ -355,7 +334,7 @@ def get_regions():
 @app.route('/api/rpc', methods=['POST'])
 def dispatch_rpc():
     """
-    Dispatch an RPC call to a vehicle via MQTT
+    Dispatch an RPC call to a vehicle via dispatcher_api gRPC service.
 
     Request body:
     {
@@ -366,14 +345,8 @@ def dispatch_rpc():
         "timeout_ms": 5000
     }
 
-    Note: RPCs are fire-and-forget from dashboard perspective.
-    Response tracking is handled by dispatcher_api service.
+    Returns the full RPC response including result_json.
     """
-    global mqtt_client, mqtt_connected
-
-    if not mqtt_connected:
-        return jsonify({'error': 'MQTT not connected'}), 503
-
     data = request.get_json()
     if not data:
         return jsonify({'error': 'JSON body required'}), 400
@@ -387,45 +360,71 @@ def dispatch_rpc():
     service_name = data['service_name']
     method_name = data['method_name']
     parameters = data.get('parameters', {})
-    timeout_ms = data.get('timeout_ms', 5000)
+    timeout_ms = data.get('timeout_ms', 10000)  # Default 10s
 
-    # Generate request ID
-    request_id = str(uuid.uuid4())
-    timestamp_ns = int(time.time() * 1e9)
-
-    # Build RPC request envelope (matches dispatcher_rpc_envelope.proto)
-    rpc_request = {
-        'request_id': request_id,
-        'service_name': service_name,
-        'method_name': method_name,
-        'parameters_json': json.dumps(parameters),
-        'timeout_ms': timeout_ms,
-        'timestamp_ns': timestamp_ns
-    }
-
-    # Publish to MQTT c2v topic (content_id=200 for RPC)
-    topic = f"c2v/{vehicle_id}/200"
     try:
-        result = mqtt_client.publish(topic, json.dumps(rpc_request), qos=1)
-        result.wait_for_publish(timeout=2.0)
+        # Connect to dispatcher_api gRPC service
+        channel = grpc.insecure_channel(f'{DISPATCHER_HOST}:{DISPATCHER_PORT}')
+        stub = dispatcher_grpc.CloudDispatcherServiceStub(channel)
+
+        # Build the RPC request
+        grpc_request = dispatcher_pb2.CallMethodRequest(
+            vehicle_id=vehicle_id,
+            service_name=service_name,
+            method_name=method_name,
+            parameters_json=json.dumps(parameters),
+            timeout_ms=timeout_ms,
+            requester_id='fleet_dashboard'
+        )
+
+        # Call the synchronous RPC method (blocks until response or timeout)
+        grpc_timeout = (timeout_ms / 1000.0) + 5  # Add 5s buffer for network
+        response = stub.CallMethod(grpc_request, timeout=grpc_timeout)
+
+        channel.close()
+
+        # Map gRPC status to string
+        status_map = {
+            dispatcher_pb2.CLOUD_RPC_SUCCESS: 'success',
+            dispatcher_pb2.CLOUD_RPC_PENDING: 'pending',
+            dispatcher_pb2.CLOUD_RPC_FAILED: 'failed',
+            dispatcher_pb2.CLOUD_RPC_TIMEOUT: 'timeout',
+            dispatcher_pb2.CLOUD_RPC_VEHICLE_OFFLINE: 'vehicle_offline',
+            dispatcher_pb2.CLOUD_RPC_SERVICE_UNAVAILABLE: 'service_unavailable',
+            dispatcher_pb2.CLOUD_RPC_METHOD_NOT_FOUND: 'method_not_found',
+            dispatcher_pb2.CLOUD_RPC_INVALID_PARAMETERS: 'invalid_parameters',
+            dispatcher_pb2.CLOUD_RPC_TRANSPORT_ERROR: 'transport_error',
+            dispatcher_pb2.CLOUD_RPC_CANCELLED: 'cancelled',
+        }
+        status_str = status_map.get(response.status, 'unknown')
+
+        result = {
+            'correlation_id': response.correlation_id,
+            'vehicle_id': vehicle_id,
+            'service_name': service_name,
+            'method_name': method_name,
+            'status': status_str,
+            'duration_ms': response.duration_ms
+        }
+
+        if response.status == dispatcher_pb2.CLOUD_RPC_SUCCESS:
+            result['result'] = json.loads(response.result_json) if response.result_json else None
+        else:
+            result['error'] = response.error_message or status_str
+
+        return jsonify(result)
+
+    except grpc.RpcError as e:
+        return jsonify({
+            'error': f'Dispatcher API error: {e.details()}',
+            'status': 'grpc_error',
+            'code': str(e.code())
+        }), 503
     except Exception as e:
         return jsonify({
-            'error': f'MQTT publish failed: {str(e)}',
-            'request_id': request_id
+            'error': f'RPC dispatch failed: {str(e)}',
+            'status': 'error'
         }), 500
-
-    return jsonify({
-        'request_id': request_id,
-        'vehicle_id': vehicle_id,
-        'service_name': service_name,
-        'method_name': method_name,
-        'status': 'dispatched',
-        'topic': topic
-    })
-
-
-# Note: RPC status tracking removed - RPCs are now fire-and-forget from dashboard.
-# For synchronous RPC with response tracking, use the dispatcher_api gRPC service.
 
 
 # =============================================================================
@@ -435,7 +434,7 @@ def dispatch_rpc():
 @app.route('/api/schedule', methods=['POST'])
 def schedule_job():
     """
-    Schedule a job on a vehicle
+    Schedule a job on a vehicle via scheduler_api gRPC service
 
     Request body:
     {
@@ -448,11 +447,6 @@ def schedule_job():
         "recurrence_rule": "FREQ=HOURLY;INTERVAL=1"
     }
     """
-    global mqtt_client, mqtt_connected
-
-    if not mqtt_connected:
-        return jsonify({'error': 'MQTT not connected'}), 503
-
     data = request.get_json()
     if not data:
         return jsonify({'error': 'JSON body required'}), 400
@@ -463,66 +457,80 @@ def schedule_job():
             return jsonify({'error': f'Missing required field: {field}'}), 400
 
     vehicle_id = data['vehicle_id']
-    job_id = data.get('job_id', str(uuid.uuid4()))
 
-    # Build scheduler command message
-    scheduler_cmd = {
-        'command': 'create_job',
-        'job': {
-            'job_id': job_id,
-            'title': data.get('title', f"{data['service_name']}.{data['method_name']}"),
-            'service': data['service_name'],
-            'method': data['method_name'],
-            'parameters': json.dumps(data.get('parameters', {})),
-            'scheduled_time': data.get('scheduled_time', ''),
-            'recurrence_rule': data.get('recurrence_rule', ''),
-            'status': 0,  # PENDING
-            'created_at_ms': int(time.time() * 1000)
-        }
-    }
-
-    # Publish to MQTT c2v topic (content_id=202 for Scheduler)
-    topic = f"c2v/{vehicle_id}/202"
     try:
-        result = mqtt_client.publish(topic, json.dumps(scheduler_cmd), qos=1)
-        result.wait_for_publish(timeout=2.0)
-    except Exception as e:
-        return jsonify({'error': f'MQTT publish failed: {str(e)}'}), 500
+        stub, channel = get_scheduler_stub()
 
-    return jsonify({
-        'job_id': job_id,
-        'vehicle_id': vehicle_id,
-        'status': 'scheduled',
-        'topic': topic
-    })
+        # Build gRPC request
+        grpc_request = scheduler_pb2.CreateJobRequest(
+            vehicle_id=vehicle_id,
+            title=data.get('title', f"{data['service_name']}.{data['method_name']}"),
+            service=data['service_name'],
+            method=data['method_name'],
+            parameters_json=json.dumps(data.get('parameters', {})),
+            scheduled_time=data.get('scheduled_time', ''),
+            recurrence_rule=data.get('recurrence_rule', ''),
+            created_by='fleet_dashboard'
+        )
+
+        response = stub.CreateJob(grpc_request, timeout=10.0)
+        channel.close()
+
+        if response.success:
+            return jsonify({
+                'job_id': response.job_id,
+                'vehicle_id': vehicle_id,
+                'status': 'scheduled'
+            })
+        else:
+            return jsonify({
+                'error': response.error_message or 'Failed to create job',
+                'vehicle_id': vehicle_id
+            }), 500
+
+    except grpc.RpcError as e:
+        return jsonify({
+            'error': f'Scheduler API error: {e.details()}',
+            'code': str(e.code())
+        }), 503
+    except Exception as e:
+        return jsonify({'error': f'Failed to create job: {str(e)}'}), 500
 
 
 @app.route('/api/schedule/<vehicle_id>/<job_id>', methods=['DELETE'])
 def delete_job(vehicle_id, job_id):
-    """Delete a scheduled job on a vehicle"""
-    global mqtt_client, mqtt_connected
-
-    if not mqtt_connected:
-        return jsonify({'error': 'MQTT not connected'}), 503
-
-    # Build delete command
-    scheduler_cmd = {
-        'command': 'delete_job',
-        'job_id': job_id
-    }
-
-    topic = f"c2v/{vehicle_id}/202"
+    """Delete a scheduled job on a vehicle via scheduler_api gRPC service"""
     try:
-        result = mqtt_client.publish(topic, json.dumps(scheduler_cmd), qos=1)
-        result.wait_for_publish(timeout=2.0)
-    except Exception as e:
-        return jsonify({'error': f'MQTT publish failed: {str(e)}'}), 500
+        stub, channel = get_scheduler_stub()
 
-    return jsonify({
-        'job_id': job_id,
-        'vehicle_id': vehicle_id,
-        'status': 'delete_requested'
-    })
+        grpc_request = scheduler_pb2.DeleteJobRequest(
+            vehicle_id=vehicle_id,
+            job_id=job_id
+        )
+
+        response = stub.DeleteJob(grpc_request, timeout=10.0)
+        channel.close()
+
+        if response.success:
+            return jsonify({
+                'job_id': job_id,
+                'vehicle_id': vehicle_id,
+                'status': 'delete_requested'
+            })
+        else:
+            return jsonify({
+                'error': response.error_message or 'Failed to delete job',
+                'job_id': job_id,
+                'vehicle_id': vehicle_id
+            }), 500
+
+    except grpc.RpcError as e:
+        return jsonify({
+            'error': f'Scheduler API error: {e.details()}',
+            'code': str(e.code())
+        }), 503
+    except Exception as e:
+        return jsonify({'error': f'Failed to delete job: {str(e)}'}), 500
 
 
 @app.route('/api/jobs')
@@ -580,6 +588,68 @@ def get_job_executions(vehicle_id, job_id):
     return jsonify({'executions': executions})
 
 
+@app.route('/api/executions')
+def get_all_executions():
+    """Get job executions across fleet with optional filters"""
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+    vehicle_id = request.args.get('vehicle_id')
+    status = request.args.get('status')
+    limit = int(request.args.get('limit', 100))
+    offset = int(request.args.get('offset', 0))
+
+    # Build query with optional filters
+    query = """
+        SELECT
+            je.id,
+            je.vehicle_id,
+            je.job_id,
+            je.status,
+            je.executed_at_ms,
+            je.duration_ms,
+            je.error_message,
+            je.result as result_json,
+            j.title as job_title,
+            j.service_name,
+            j.method_name
+        FROM job_executions je
+        LEFT JOIN jobs j ON je.vehicle_id = j.vehicle_id AND je.job_id = j.job_id
+        WHERE 1=1
+    """
+    params = []
+
+    if vehicle_id:
+        query += " AND je.vehicle_id = %s"
+        params.append(vehicle_id)
+
+    if status:
+        query += " AND je.status = %s"
+        params.append(status)
+
+    # Get total count
+    count_query = f"SELECT COUNT(*) as count FROM ({query}) subq"
+    cur.execute(count_query, params)
+    total = cur.fetchone()['count']
+
+    # Get page
+    query += " ORDER BY je.executed_at_ms DESC LIMIT %s OFFSET %s"
+    params.extend([limit, offset])
+
+    cur.execute(query, params)
+    executions = cur.fetchall()
+
+    cur.close()
+    conn.close()
+
+    return jsonify({
+        'executions': executions,
+        'total': total,
+        'limit': limit,
+        'offset': offset
+    })
+
+
 # =============================================================================
 # Health and Status
 # =============================================================================
@@ -589,7 +659,6 @@ def health_check():
     """Health check endpoint"""
     status = {
         'status': 'healthy',
-        'mqtt_connected': mqtt_connected,
         'timestamp': datetime.now().isoformat()
     }
 
@@ -603,6 +672,30 @@ def health_check():
         status['database'] = 'connected'
     except Exception as e:
         status['database'] = f'error: {str(e)}'
+        status['status'] = 'degraded'
+
+    # Check scheduler_api gRPC
+    try:
+        stub, channel = get_scheduler_stub()
+        # Simple connectivity test - list jobs with limit 0
+        grpc_request = scheduler_pb2.ListJobsRequest(page_size=0)
+        stub.ListJobs(grpc_request, timeout=2.0)
+        channel.close()
+        status['scheduler_api'] = 'connected'
+    except Exception as e:
+        status['scheduler_api'] = f'error: {str(e)}'
+        status['status'] = 'degraded'
+
+    # Check dispatcher_api gRPC
+    try:
+        channel = grpc.insecure_channel(f'{DISPATCHER_HOST}:{DISPATCHER_PORT}')
+        stub = dispatcher_grpc.CloudDispatcherServiceStub(channel)
+        # Simple connectivity check via channel ready
+        grpc.channel_ready_future(channel).result(timeout=2.0)
+        channel.close()
+        status['dispatcher_api'] = 'connected'
+    except Exception as e:
+        status['dispatcher_api'] = f'error: {str(e)}'
         status['status'] = 'degraded'
 
     return jsonify(status)
@@ -667,14 +760,16 @@ def get_schema(service_name):
         SELECT
             service_name,
             version,
-            schema_hash,
-            ifex_schema,
-            methods,
-            struct_definitions,
-            enum_definitions,
-            schema_count as vehicle_count
-        FROM schema_registry
-        WHERE service_name = %s
+            sr.schema_hash,
+            sr.ifex_schema,
+            sr.methods,
+            sr.struct_definitions,
+            sr.enum_definitions,
+            COUNT(DISTINCT vs.vehicle_id) as vehicle_count
+        FROM schema_registry sr
+        LEFT JOIN vehicle_schemas vs ON sr.schema_hash = vs.schema_hash
+        WHERE sr.service_name = %s
+        GROUP BY sr.schema_hash, sr.service_name, sr.version, sr.ifex_schema, sr.methods, sr.struct_definitions, sr.enum_definitions
         LIMIT 1
     """, (service_name,))
     schema = cur.fetchone()
@@ -741,17 +836,19 @@ def get_discovered_services():
         return jsonify({'services': enriched})
 
     else:
-        # All services grouped from schema_registry
+        # All services grouped from schema_registry with actual vehicle counts
         cur.execute("""
             SELECT
-                service_name,
-                version,
-                schema_hash,
-                methods,
-                schema_count as vehicle_count,
-                first_seen_at as last_seen
-            FROM schema_registry
-            ORDER BY schema_count DESC
+                sr.service_name,
+                sr.version,
+                sr.schema_hash,
+                sr.methods,
+                COUNT(DISTINCT vs.vehicle_id) as vehicle_count,
+                sr.first_seen_at as last_seen
+            FROM schema_registry sr
+            LEFT JOIN vehicle_schemas vs ON sr.schema_hash = vs.schema_hash
+            GROUP BY sr.schema_hash, sr.service_name, sr.version, sr.methods, sr.first_seen_at
+            ORDER BY vehicle_count DESC
         """)
         services = cur.fetchall()
 
@@ -794,51 +891,59 @@ def get_calendar(vehicle_id):
         conn.close()
         return jsonify({'error': 'Vehicle not found'}), 404
 
-    # Get synced jobs from vehicle
+    # Get cloud-scheduled jobs from offboard_calendar
     cur.execute("""
-        SELECT job_id, title, service_name, method_name, parameters,
-               scheduled_time, recurrence_rule, next_run_time, status,
-               wake_policy, sleep_policy, wake_lead_time_s,
-               'synced' as source, sync_updated_at as updated_at
-        FROM jobs
-        WHERE vehicle_id = %s
-        ORDER BY scheduled_time
-    """, (vehicle_id,))
-    synced_jobs = cur.fetchall()
-
-    # Get pending offboard calendar entries
-    cur.execute("""
-        SELECT job_id, title, service_name, method_name, parameters,
-               scheduled_time::text, recurrence_rule, NULL as next_run_time,
-               'pending' as status,
-               wake_policy, sleep_policy, wake_lead_time_s,
-               'offboard' as source, created_at as updated_at,
-               sync_status, sync_error
+        SELECT
+            job_id, title, service_name, method_name, parameters,
+            scheduled_time::text as scheduled_time, recurrence_rule,
+            NULL as next_run_time,
+            CASE WHEN sync_status = 'synced' THEN 'sent' ELSE 'pending' END as sync_state,
+            NULL as job_status,
+            wake_policy, sleep_policy, wake_lead_time_s,
+            'cloud' as source
         FROM offboard_calendar
-        WHERE vehicle_id = %s AND sync_status != 'synced'
-        ORDER BY scheduled_time
+        WHERE vehicle_id = %s
+        ORDER BY scheduled_time NULLS LAST
     """, (vehicle_id,))
-    pending_jobs = cur.fetchall()
+    cloud_jobs = cur.fetchall()
+
+    # Get vehicle-confirmed jobs (that don't have a matching offboard entry)
+    cur.execute("""
+        SELECT
+            j.job_id, j.title, j.service_name, j.method_name, j.parameters,
+            j.scheduled_time, j.recurrence_rule, j.next_run_time,
+            'confirmed' as sync_state,
+            j.status as job_status,
+            j.wake_policy, j.sleep_policy, j.wake_lead_time_s,
+            'vehicle' as source
+        FROM jobs j
+        LEFT JOIN offboard_calendar oc ON j.job_id = oc.job_id AND j.vehicle_id = oc.vehicle_id
+        WHERE j.vehicle_id = %s AND oc.job_id IS NULL
+        ORDER BY j.scheduled_time NULLS LAST
+    """, (vehicle_id,))
+    vehicle_jobs = cur.fetchall()
 
     cur.close()
     conn.close()
+
+    # Combine and return
+    all_jobs = list(cloud_jobs) + list(vehicle_jobs)
 
     return jsonify({
         'vehicle_id': vehicle_id,
         'vehicle_online': vehicle['is_online'],
         'last_seen': vehicle['last_seen_at'].isoformat() if vehicle['last_seen_at'] else None,
-        'jobs': synced_jobs,
-        'pending': pending_jobs
+        'calendar': all_jobs
     })
 
 
 @app.route('/api/calendar/<vehicle_id>', methods=['POST'])
 def create_calendar_entry(vehicle_id):
     """
-    Create a calendar entry for a vehicle
+    Create a calendar entry for a vehicle via scheduler_api gRPC service
 
-    If vehicle is online: sends scheduler command immediately
-    If vehicle is offline: stores in offboard_calendar for later sync
+    The scheduler_api handles all routing (online/offline vehicle handling).
+    We also store in offboard_calendar for dashboard tracking.
 
     Request body:
     {
@@ -853,8 +958,6 @@ def create_calendar_entry(vehicle_id):
         "wake_lead_time_s": 300
     }
     """
-    global mqtt_client, mqtt_connected
-
     data = request.get_json()
     if not data:
         return jsonify({'error': 'JSON body required'}), 400
@@ -882,87 +985,82 @@ def create_calendar_entry(vehicle_id):
         conn.commit()
         vehicle = {'vehicle_id': vehicle_id, 'is_online': False}
 
-    job_id = data.get('job_id', str(uuid.uuid4()))
     scheduled_time = data.get('scheduled_time')
-
-    # Store in offboard_calendar
-    try:
-        cur.execute("""
-            INSERT INTO offboard_calendar
-            (vehicle_id, job_id, title, service_name, method_name, parameters,
-             scheduled_time, recurrence_rule, end_time,
-             wake_policy, sleep_policy, wake_lead_time_s,
-             sync_status, created_by)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            RETURNING id
-        """, (
-            vehicle_id,
-            job_id,
-            data.get('title', f"{data['service_name']}.{data['method_name']}"),
-            data['service_name'],
-            data['method_name'],
-            json.dumps(data.get('parameters', {})),
-            scheduled_time,
-            data.get('recurrence_rule'),
-            data.get('end_time'),
-            data.get('wake_policy', 0),
-            data.get('sleep_policy', 0),
-            data.get('wake_lead_time_s', 0),
-            'pending',
-            data.get('created_by', 'api')
-        ))
-        conn.commit()
-    except Exception as e:
-        conn.rollback()
-        cur.close()
-        conn.close()
-        return jsonify({'error': f'Database error: {str(e)}'}), 500
-
     sync_status = 'pending'
     sync_error = None
+    job_id = None
 
-    # If vehicle is online and MQTT connected, send immediately
-    if vehicle['is_online'] and mqtt_connected:
-        scheduler_cmd = {
-            'command_id': str(uuid.uuid4()),
-            'timestamp_ns': int(time.time() * 1e9),
-            'requester_id': 'fleet_dashboard',
-            'type': 1,  # COMMAND_CREATE_JOB
-            'create_job': {
-                'job_id': job_id,
-                'title': data.get('title', f"{data['service_name']}.{data['method_name']}"),
-                'service': data['service_name'],
-                'method': data['method_name'],
-                'parameters_json': json.dumps(data.get('parameters', {})),
-                'scheduled_time': scheduled_time or '',
-                'recurrence_rule': data.get('recurrence_rule', ''),
-                'end_time': data.get('end_time', ''),
-                'wake_policy': data.get('wake_policy', 0),
-                'sleep_policy': data.get('sleep_policy', 0),
-                'wake_lead_time_s': data.get('wake_lead_time_s', 0)
-            }
-        }
+    # Send to scheduler_api via gRPC
+    try:
+        stub, channel = get_scheduler_stub()
 
-        topic = f"c2v/{vehicle_id}/202"
-        try:
-            result = mqtt_client.publish(topic, json.dumps(scheduler_cmd), qos=1)
-            result.wait_for_publish(timeout=2.0)
+        grpc_request = scheduler_pb2.CreateJobRequest(
+            vehicle_id=vehicle_id,
+            title=data.get('title', f"{data['service_name']}.{data['method_name']}"),
+            service=data['service_name'],
+            method=data['method_name'],
+            parameters_json=json.dumps(data.get('parameters', {})),
+            scheduled_time=scheduled_time or '',
+            recurrence_rule=data.get('recurrence_rule', ''),
+            end_time=data.get('end_time', ''),
+            created_by=data.get('created_by', 'fleet_dashboard')
+        )
+
+        response = stub.CreateJob(grpc_request, timeout=10.0)
+        channel.close()
+
+        if response.success:
+            job_id = response.job_id
             sync_status = 'synced'
+        else:
+            sync_error = response.error_message or 'Failed to create job'
 
-            # Update offboard_calendar sync status
+    except grpc.RpcError as e:
+        sync_error = f'Scheduler API error: {e.details()}'
+    except Exception as e:
+        sync_error = str(e)
+
+    # Store in offboard_calendar for dashboard tracking (with job_id from scheduler)
+    if job_id:
+        try:
             cur.execute("""
-                UPDATE offboard_calendar
-                SET sync_status = 'synced', synced_at = NOW()
-                WHERE job_id = %s
-            """, (job_id,))
+                INSERT INTO offboard_calendar
+                (vehicle_id, job_id, title, service_name, method_name, parameters,
+                 scheduled_time, recurrence_rule, end_time,
+                 wake_policy, sleep_policy, wake_lead_time_s,
+                 sync_status, synced_at, created_by)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), %s)
+                ON CONFLICT (job_id) DO UPDATE SET sync_status = 'synced', synced_at = NOW()
+            """, (
+                vehicle_id,
+                job_id,
+                data.get('title', f"{data['service_name']}.{data['method_name']}"),
+                data['service_name'],
+                data['method_name'],
+                json.dumps(data.get('parameters', {})),
+                scheduled_time,
+                data.get('recurrence_rule'),
+                data.get('end_time'),
+                data.get('wake_policy', 0),
+                data.get('sleep_policy', 0),
+                data.get('wake_lead_time_s', 0),
+                sync_status,
+                data.get('created_by', 'fleet_dashboard')
+            ))
             conn.commit()
-
         except Exception as e:
-            sync_error = str(e)
-            sync_status = 'pending'
+            # Log but don't fail - gRPC call succeeded
+            print(f"Warning: Failed to store in offboard_calendar: {e}")
 
     cur.close()
     conn.close()
+
+    if sync_error and not job_id:
+        return jsonify({
+            'error': sync_error,
+            'vehicle_id': vehicle_id,
+            'vehicle_online': vehicle['is_online']
+        }), 503
 
     return jsonify({
         'job_id': job_id,
@@ -974,11 +1072,170 @@ def create_calendar_entry(vehicle_id):
     })
 
 
+@app.route('/api/calendar/<vehicle_id>/command', methods=['POST'])
+def send_calendar_command(vehicle_id):
+    """
+    Send a scheduler command for a job via scheduler_api gRPC service
+
+    Supported command types:
+    - update_job: Update job parameters, scheduled_time, recurrence
+    - delete_job: Delete the job
+    - pause_job: Pause the job
+    - resume_job: Resume a paused job
+    - trigger_job: Trigger immediate execution
+
+    Request body:
+    {
+        "command_type": "update_job|delete_job|pause_job|resume_job|trigger_job",
+        "job_id": "uuid",
+        "scheduled_time": "2026-01-15T10:00:00Z",  (for update_job)
+        "parameters": {...},  (for update_job)
+        "recurrence_rule": "FREQ=DAILY"  (for update_job)
+    }
+    """
+    data = request.get_json()
+    if not data:
+        return jsonify({'error': 'JSON body required'}), 400
+
+    command_type = data.get('command_type')
+    job_id = data.get('job_id')
+
+    if not command_type:
+        return jsonify({'error': 'Missing required field: command_type'}), 400
+    if not job_id:
+        return jsonify({'error': 'Missing required field: job_id'}), 400
+
+    command_type_normalized = command_type.lower()
+    valid_commands = ['update_job', 'delete_job', 'pause_job', 'resume_job', 'trigger_job']
+
+    if command_type_normalized not in valid_commands:
+        return jsonify({'error': f'Unknown command_type: {command_type}'}), 400
+
+    # Send to scheduler_api via gRPC
+    try:
+        stub, channel = get_scheduler_stub()
+        response = None
+
+        if command_type_normalized == 'update_job':
+            grpc_request = scheduler_pb2.UpdateJobRequest(
+                vehicle_id=vehicle_id,
+                job_id=job_id,
+                title=data.get('title', ''),
+                scheduled_time=data.get('scheduled_time', ''),
+                recurrence_rule=data.get('recurrence_rule', ''),
+                parameters_json=json.dumps(data['parameters']) if 'parameters' in data else data.get('parameters_json', ''),
+                end_time=data.get('end_time', '')
+            )
+            response = stub.UpdateJob(grpc_request, timeout=10.0)
+
+        elif command_type_normalized == 'delete_job':
+            grpc_request = scheduler_pb2.DeleteJobRequest(
+                vehicle_id=vehicle_id,
+                job_id=job_id
+            )
+            response = stub.DeleteJob(grpc_request, timeout=10.0)
+
+        elif command_type_normalized == 'pause_job':
+            grpc_request = scheduler_pb2.PauseJobRequest(
+                vehicle_id=vehicle_id,
+                job_id=job_id
+            )
+            response = stub.PauseJob(grpc_request, timeout=10.0)
+
+        elif command_type_normalized == 'resume_job':
+            grpc_request = scheduler_pb2.ResumeJobRequest(
+                vehicle_id=vehicle_id,
+                job_id=job_id
+            )
+            response = stub.ResumeJob(grpc_request, timeout=10.0)
+
+        elif command_type_normalized == 'trigger_job':
+            grpc_request = scheduler_pb2.TriggerJobRequest(
+                vehicle_id=vehicle_id,
+                job_id=job_id
+            )
+            response = stub.TriggerJob(grpc_request, timeout=10.0)
+
+        channel.close()
+
+        if not response.success:
+            return jsonify({
+                'error': response.error_message or f'Failed to {command_type}',
+                'job_id': job_id,
+                'vehicle_id': vehicle_id
+            }), 500
+
+    except grpc.RpcError as e:
+        return jsonify({
+            'error': f'Scheduler API error: {e.details()}',
+            'code': str(e.code())
+        }), 503
+    except Exception as e:
+        return jsonify({'error': f'Failed to send command: {str(e)}'}), 500
+
+    # Update offboard_calendar if applicable
+    conn = get_db_connection()
+    cur = conn.cursor()
+
+    try:
+        if command_type_normalized == 'update_job':
+            # Update offboard_calendar with new values
+            updates = []
+            params = []
+            if 'scheduled_time' in data:
+                updates.append("scheduled_time = %s")
+                params.append(data['scheduled_time'])
+            if 'parameters' in data:
+                updates.append("parameters = %s")
+                params.append(json.dumps(data['parameters']))
+            elif 'parameters_json' in data:
+                updates.append("parameters = %s")
+                params.append(data['parameters_json'])
+            if 'recurrence_rule' in data:
+                updates.append("recurrence_rule = %s")
+                params.append(data['recurrence_rule'])
+            if 'title' in data:
+                updates.append("title = %s")
+                params.append(data['title'])
+
+            if updates:
+                updates.append("updated_at = NOW()")
+                params.extend([vehicle_id, job_id])
+                cur.execute(f"""
+                    UPDATE offboard_calendar
+                    SET {', '.join(updates)}
+                    WHERE vehicle_id = %s AND job_id = %s
+                """, params)
+                conn.commit()
+
+        elif command_type_normalized == 'delete_job':
+            # Remove from offboard_calendar
+            cur.execute("""
+                DELETE FROM offboard_calendar
+                WHERE vehicle_id = %s AND job_id = %s
+            """, (vehicle_id, job_id))
+            conn.commit()
+
+    except Exception as e:
+        conn.rollback()
+        # Log but don't fail - gRPC command was sent
+        print(f"Warning: Failed to update offboard_calendar: {e}")
+
+    finally:
+        cur.close()
+        conn.close()
+
+    return jsonify({
+        'job_id': job_id,
+        'vehicle_id': vehicle_id,
+        'command_type': command_type,
+        'status': 'sent'
+    })
+
+
 @app.route('/api/calendar/<vehicle_id>/<job_id>', methods=['DELETE'])
 def delete_calendar_entry(vehicle_id, job_id):
-    """Delete a calendar entry"""
-    global mqtt_client, mqtt_connected
-
+    """Delete a calendar entry via scheduler_api gRPC service"""
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
@@ -990,7 +1247,7 @@ def delete_calendar_entry(vehicle_id, job_id):
     offboard_entry = cur.fetchone()
 
     if offboard_entry and offboard_entry['sync_status'] == 'pending':
-        # Just delete from offboard_calendar
+        # Just delete from offboard_calendar (wasn't synced yet)
         cur.execute("""
             DELETE FROM offboard_calendar WHERE job_id = %s
         """, (job_id,))
@@ -1011,40 +1268,47 @@ def delete_calendar_entry(vehicle_id, job_id):
     if not vehicle:
         return jsonify({'error': 'Vehicle not found'}), 404
 
-    # Send delete command to vehicle
-    if mqtt_connected:
-        scheduler_cmd = {
-            'command_id': str(uuid.uuid4()),
-            'timestamp_ns': int(time.time() * 1e9),
-            'requester_id': 'fleet_dashboard',
-            'type': 3,  # COMMAND_DELETE_JOB
-            'delete_job_id': job_id
-        }
+    # Send delete command via scheduler_api gRPC
+    try:
+        stub, channel = get_scheduler_stub()
 
-        topic = f"c2v/{vehicle_id}/202"
-        try:
-            result = mqtt_client.publish(topic, json.dumps(scheduler_cmd), qos=1)
-            result.wait_for_publish(timeout=2.0)
+        grpc_request = scheduler_pb2.DeleteJobRequest(
+            vehicle_id=vehicle_id,
+            job_id=job_id
+        )
+
+        response = stub.DeleteJob(grpc_request, timeout=10.0)
+        channel.close()
+
+        if response.success:
             return jsonify({
                 'job_id': job_id,
                 'vehicle_id': vehicle_id,
                 'status': 'delete_sent',
                 'vehicle_online': vehicle['is_online']
             })
-        except Exception as e:
-            return jsonify({'error': f'MQTT publish failed: {str(e)}'}), 500
+        else:
+            return jsonify({
+                'error': response.error_message or 'Failed to delete job',
+                'job_id': job_id,
+                'vehicle_id': vehicle_id
+            }), 500
 
-    return jsonify({'error': 'MQTT not connected'}), 503
+    except grpc.RpcError as e:
+        return jsonify({
+            'error': f'Scheduler API error: {e.details()}',
+            'code': str(e.code())
+        }), 503
+    except Exception as e:
+        return jsonify({'error': f'Failed to send command: {str(e)}'}), 500
 
 
 if __name__ == '__main__':
     port = int(os.getenv('DASHBOARD_PORT', 5000))
     print(f"Starting IFEX Fleet Dashboard API on port {port}")
     print(f"Database: {DB_NAME}@{DB_HOST}:{DB_PORT}")
-    print(f"MQTT: {MQTT_HOST}:{MQTT_PORT}")
-
-    # Initialize MQTT for c2v publishing
-    init_mqtt()
+    print(f"Dispatcher API: {DISPATCHER_HOST}:{DISPATCHER_PORT}")
+    print(f"Scheduler API: {SCHEDULER_HOST}:{SCHEDULER_PORT}")
 
     print(f"Open http://localhost:{port}/ in your browser")
     app.run(host='0.0.0.0', port=port, debug=True)

@@ -113,11 +113,10 @@ void DiscoveryStore::store_schema(
         INSERT INTO schema_registry (
             schema_hash, ifex_schema, service_name, version,
             methods, struct_definitions, enum_definitions,
-            first_seen_at, first_vehicle_id, schema_count
+            first_seen_at, first_vehicle_id
         )
-        VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb, NOW(), $8, 1)
-        ON CONFLICT (schema_hash) DO UPDATE
-        SET schema_count = schema_registry.schema_count + 1
+        VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb, NOW(), $8)
+        ON CONFLICT (schema_hash) DO NOTHING
         )",
         {
             schema_hash,
@@ -218,8 +217,9 @@ void DiscoveryStore::parse_ifex_schema(
         }
         methods_json = methods_arr.dump();
 
-        // Extract structs
+        // Extract structs (from typedefs at root or structs inside namespaces)
         json structs_obj = json::object();
+        // First check root-level typedefs (legacy format)
         if (root["typedefs"]) {
             for (const auto& td : root["typedefs"]) {
                 if (td["members"]) {
@@ -235,10 +235,64 @@ void DiscoveryStore::parse_ifex_schema(
                 }
             }
         }
+        // Also check namespace-level structs (standard IFEX format)
+        if (root["namespaces"]) {
+            for (const auto& ns : root["namespaces"]) {
+                if (ns["structs"]) {
+                    for (const auto& st : ns["structs"]) {
+                        std::string st_name = st["name"] ? st["name"].as<std::string>() : "";
+                        json members = json::array();
+                        if (st["members"]) {
+                            for (const auto& member : st["members"]) {
+                                json member_obj;
+                                member_obj["name"] = member["name"] ? member["name"].as<std::string>() : "";
+                                member_obj["datatype"] = member["datatype"] ? member["datatype"].as<std::string>() : "";
+                                member_obj["description"] = member["description"] ? member["description"].as<std::string>() : "";
+                                if (member["default"]) {
+                                    // Handle different default value types
+                                    if (member["default"].IsScalar()) {
+                                        try {
+                                            member_obj["default"] = member["default"].as<int>();
+                                        } catch (...) {
+                                            try {
+                                                member_obj["default"] = member["default"].as<double>();
+                                            } catch (...) {
+                                                member_obj["default"] = member["default"].as<std::string>();
+                                            }
+                                        }
+                                    }
+                                }
+                                if (member["constraints"]) {
+                                    json constraints;
+                                    if (member["constraints"]["min"]) {
+                                        try {
+                                            constraints["min"] = member["constraints"]["min"].as<double>();
+                                        } catch (...) {
+                                            constraints["min"] = member["constraints"]["min"].as<int>();
+                                        }
+                                    }
+                                    if (member["constraints"]["max"]) {
+                                        try {
+                                            constraints["max"] = member["constraints"]["max"].as<double>();
+                                        } catch (...) {
+                                            constraints["max"] = member["constraints"]["max"].as<int>();
+                                        }
+                                    }
+                                    member_obj["constraints"] = constraints;
+                                }
+                                members.push_back(member_obj);
+                            }
+                        }
+                        structs_obj[st_name] = members;
+                    }
+                }
+            }
+        }
         structs_json = structs_obj.dump();
 
-        // Extract enums
+        // Extract enums (from enumerations at root or inside namespaces)
         json enums_obj = json::object();
+        // First check root-level enumerations (legacy format)
         if (root["enumerations"]) {
             for (const auto& en : root["enumerations"]) {
                 std::string en_name = en["name"] ? en["name"].as<std::string>() : "";
@@ -249,6 +303,26 @@ void DiscoveryStore::parse_ifex_schema(
                     }
                 }
                 enums_obj[en_name] = values;
+            }
+        }
+        // Also check namespace-level enumerations (standard IFEX format)
+        if (root["namespaces"]) {
+            for (const auto& ns : root["namespaces"]) {
+                if (ns["enumerations"]) {
+                    for (const auto& en : ns["enumerations"]) {
+                        std::string en_name = en["name"] ? en["name"].as<std::string>() : "";
+                        json values = json::array();
+                        if (en["options"]) {
+                            for (const auto& opt : en["options"]) {
+                                std::string opt_name = opt["name"] ? opt["name"].as<std::string>() : "";
+                                int opt_value = opt["value"] ? opt["value"].as<int>() : 0;
+                                // Store as "NAME (value)" for easier parsing in frontend
+                                values.push_back(opt_name + " (" + std::to_string(opt_value) + ")");
+                            }
+                        }
+                        enums_obj[en_name] = values;
+                    }
+                }
             }
         }
         enums_json = enums_obj.dump();

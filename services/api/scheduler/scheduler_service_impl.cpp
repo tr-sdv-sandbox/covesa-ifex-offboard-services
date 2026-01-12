@@ -37,6 +37,45 @@ std::string CloudSchedulerServiceImpl::generate_job_id() {
     return ss.str();
 }
 
+// Parse ISO8601 datetime string to epoch milliseconds
+// Returns 0 if the string is empty or cannot be parsed
+static uint64_t Iso8601ToEpochMs(const std::string& iso_str) {
+    if (iso_str.empty()) {
+        return 0;
+    }
+
+    std::tm tm = {};
+    std::istringstream ss(iso_str);
+
+    // Try parsing with milliseconds: 2026-01-09T17:00:00.000Z
+    ss >> std::get_time(&tm, "%Y-%m-%dT%H:%M:%S");
+    if (ss.fail()) {
+        LOG(WARNING) << "Failed to parse ISO8601 datetime: " << iso_str;
+        return 0;
+    }
+
+    // Convert to epoch seconds (UTC)
+    time_t epoch_sec = timegm(&tm);
+    if (epoch_sec == -1) {
+        LOG(WARNING) << "Failed to convert to epoch: " << iso_str;
+        return 0;
+    }
+
+    // Parse optional milliseconds
+    uint64_t ms = 0;
+    char c;
+    if (ss >> c && c == '.') {
+        int frac;
+        ss >> frac;
+        // Handle variable precision (e.g., .1, .12, .123)
+        std::string remaining = std::to_string(frac);
+        while (remaining.length() < 3) remaining += "0";
+        ms = std::stoull(remaining.substr(0, 3));
+    }
+
+    return static_cast<uint64_t>(epoch_sec) * 1000 + ms;
+}
+
 grpc::Status CloudSchedulerServiceImpl::CreateJob(
     grpc::ServerContext* context,
     const CreateJobRequest* request,
@@ -60,6 +99,10 @@ grpc::Status CloudSchedulerServiceImpl::CreateJob(
               << " method=" << request->service() << "." << request->method();
 
     try {
+        // Convert ISO8601 strings to epoch milliseconds
+        uint64_t scheduled_time_ms = Iso8601ToEpochMs(request->scheduled_time());
+        uint64_t end_time_ms = Iso8601ToEpochMs(request->end_time());
+
         bool sent = producer_->send_create_job(
             request->vehicle_id(),
             command_id,
@@ -68,9 +111,9 @@ grpc::Status CloudSchedulerServiceImpl::CreateJob(
             request->service(),
             request->method(),
             request->parameters_json(),
-            request->scheduled_time(),
+            scheduled_time_ms,
             request->recurrence_rule(),
-            request->end_time(),
+            end_time_ms,
             request->created_by());
 
         if (sent) {
@@ -152,15 +195,19 @@ grpc::Status CloudSchedulerServiceImpl::UpdateJob(
         LOG(INFO) << "UpdateJob: job=" << request->job_id()
                   << " vehicle=" << job->vehicle_id;
 
+        // Convert ISO8601 strings to epoch milliseconds
+        uint64_t scheduled_time_ms = Iso8601ToEpochMs(request->scheduled_time());
+        uint64_t end_time_ms = Iso8601ToEpochMs(request->end_time());
+
         bool sent = producer_->send_update_job(
             job->vehicle_id,
             command_id,
             request->job_id(),
             request->title(),
-            request->scheduled_time(),
+            scheduled_time_ms,
             request->recurrence_rule(),
             request->parameters_json(),
-            request->end_time(),
+            end_time_ms,
             "");  // No requester_id in proto
 
         response->set_success(sent);
@@ -478,6 +525,10 @@ grpc::Status CloudSchedulerServiceImpl::CreateFleetJob(
     LOG(INFO) << "CreateFleetJob: " << request->vehicle_ids().size() << " vehicles"
               << " method=" << request->service() << "." << request->method();
 
+    // Convert ISO8601 strings to epoch milliseconds (once, outside loop)
+    uint64_t scheduled_time_ms = Iso8601ToEpochMs(request->scheduled_time());
+    uint64_t end_time_ms = Iso8601ToEpochMs(request->end_time());
+
     int success_count = 0;
     int fail_count = 0;
 
@@ -494,9 +545,9 @@ grpc::Status CloudSchedulerServiceImpl::CreateFleetJob(
                 request->service(),
                 request->method(),
                 request->parameters_json(),
-                request->scheduled_time(),
+                scheduled_time_ms,
                 request->recurrence_rule(),
-                request->end_time(),
+                end_time_ms,
                 request->created_by());
 
             auto* result = response->add_results();

@@ -51,9 +51,9 @@ TEST_F(SchedulerCommandTest, CreateJobCommand) {
     job->set_service("climate_service");
     job->set_method("get_status");
     job->set_parameters_json(R"({"zone": "cabin"})");
-    job->set_scheduled_time("2026-01-05T08:00:00Z");
+    job->set_scheduled_time_ms(1767600000000ULL);  // 2026-01-05T08:00:00Z
     job->set_recurrence_rule("0 8 * * *");  // Daily at 8am
-    job->set_end_time("2026-12-31T23:59:59Z");
+    job->set_end_time_ms(1798761599000ULL);  // 2026-12-31T23:59:59Z
 
     // Round-trip serialization
     auto result = RoundTrip(command);
@@ -70,9 +70,9 @@ TEST_F(SchedulerCommandTest, CreateJobCommand) {
     EXPECT_EQ(create.service(), "climate_service");
     EXPECT_EQ(create.method(), "get_status");
     EXPECT_EQ(create.parameters_json(), R"({"zone": "cabin"})");
-    EXPECT_EQ(create.scheduled_time(), "2026-01-05T08:00:00Z");
+    EXPECT_EQ(create.scheduled_time_ms(), 1767600000000ULL);
     EXPECT_EQ(create.recurrence_rule(), "0 8 * * *");
-    EXPECT_EQ(create.end_time(), "2026-12-31T23:59:59Z");
+    EXPECT_EQ(create.end_time_ms(), 1798761599000ULL);
 }
 
 TEST_F(SchedulerCommandTest, CreateJobWithMinimalFields) {
@@ -85,8 +85,8 @@ TEST_F(SchedulerCommandTest, CreateJobWithMinimalFields) {
     job->set_title("Simple Job");
     job->set_service("echo_service");
     job->set_method("echo");
-    job->set_scheduled_time("2026-01-05T09:00:00Z");
-    // No recurrence_rule, end_time, parameters_json
+    job->set_scheduled_time_ms(1767603600000ULL);  // 2026-01-05T09:00:00Z
+    // No recurrence_rule, end_time_ms, parameters_json
 
     auto result = RoundTrip(command);
 
@@ -94,7 +94,7 @@ TEST_F(SchedulerCommandTest, CreateJobWithMinimalFields) {
     const auto& create = result.create_job();
     EXPECT_EQ(create.job_id(), "job-min");
     EXPECT_EQ(create.recurrence_rule(), "");  // Empty
-    EXPECT_EQ(create.end_time(), "");
+    EXPECT_EQ(create.end_time_ms(), 0ULL);    // Default to 0 (no end time)
     EXPECT_EQ(create.parameters_json(), "");
 }
 
@@ -110,7 +110,7 @@ TEST_F(SchedulerCommandTest, UpdateJobCommand) {
     auto* update = command.mutable_update_job();
     update->set_job_id("job-456");
     update->set_title("Updated HVAC Check");
-    update->set_scheduled_time("2026-01-06T09:00:00Z");
+    update->set_scheduled_time_ms(1767690000000ULL);  // 2026-01-06T09:00:00Z
     update->set_recurrence_rule("0 9 * * MON-FRI");  // Weekdays only
     update->set_parameters_json(R"({"zone": "all"})");
 
@@ -121,7 +121,7 @@ TEST_F(SchedulerCommandTest, UpdateJobCommand) {
     const auto& upd = result.update_job();
     EXPECT_EQ(upd.job_id(), "job-456");
     EXPECT_EQ(upd.title(), "Updated HVAC Check");
-    EXPECT_EQ(upd.scheduled_time(), "2026-01-06T09:00:00Z");
+    EXPECT_EQ(upd.scheduled_time_ms(), 1767690000000ULL);
     EXPECT_EQ(upd.recurrence_rule(), "0 9 * * MON-FRI");
     EXPECT_EQ(upd.parameters_json(), R"({"zone": "all"})");
 }

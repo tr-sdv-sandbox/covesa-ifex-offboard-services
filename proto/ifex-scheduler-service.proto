@@ -56,10 +56,9 @@ message job_t {
   string next_run_time = 13;
   string error_message = 14;
   string result = 15;
-  string service_address = 16;
-  wake_policy_t wake_policy = 17;
-  sleep_policy_t sleep_policy = 18;
-  uint32 wake_lead_time_s = 19;
+  wake_policy_t wake_policy = 16;
+  sleep_policy_t sleep_policy = 17;
+  uint32 wake_lead_time_s = 18;
 }
 
 // Filter criteria for retrieving jobs
@@ -82,10 +81,9 @@ message job_create_t {
   string scheduled_time = 6;
   string recurrence_rule = 7;
   string end_time = 8;
-  string service_address = 9;
-  wake_policy_t wake_policy = 10;
-  sleep_policy_t sleep_policy = 11;
-  uint32 wake_lead_time_s = 12;
+  wake_policy_t wake_policy = 9;
+  sleep_policy_t sleep_policy = 10;
+  uint32 wake_lead_time_s = 11;
 }
 
 // Fields that can be updated in an existing job
@@ -95,10 +93,9 @@ message job_update_t {
   string recurrence_rule = 3;
   string end_time = 4;
   string parameters = 5;
-  string service_address = 6;
-  wake_policy_t wake_policy = 7;
-  sleep_policy_t sleep_policy = 8;
-  uint32 wake_lead_time_s = 9;
+  wake_policy_t wake_policy = 6;
+  sleep_policy_t sleep_policy = 7;
+  uint32 wake_lead_time_s = 8;
 }
 
 // Method: create_job

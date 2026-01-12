@@ -1,3 +1,4 @@
 build/
 dashboard/venv/
 Testing/
+__pycache__/

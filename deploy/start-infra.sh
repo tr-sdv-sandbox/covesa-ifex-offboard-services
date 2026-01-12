@@ -156,25 +156,22 @@ log_info "Starting Cloud API services..."
 
 "$BUILD_DIR/dispatcher_api" \
     --kafka_broker=localhost:9092 \
-    --mqtt_host=localhost \
-    --postgres_host=localhost \
-    --listen=0.0.0.0:50100 \
+    --grpc_listen=0.0.0.0:50100 \
     > /tmp/ifex-logs/dispatcher_api.log 2>&1 &
 echo $! > /tmp/ifex-pids/dispatcher_api.pid
 log_info "  dispatcher_api started (PID: $!, port 50100)"
 
 "$BUILD_DIR/discovery_api" \
     --postgres_host=localhost \
-    --listen=0.0.0.0:50101 \
+    --grpc_listen=0.0.0.0:50101 \
     > /tmp/ifex-logs/discovery_api.log 2>&1 &
 echo $! > /tmp/ifex-pids/discovery_api.pid
 log_info "  discovery_api started (PID: $!, port 50101)"
 
 "$BUILD_DIR/scheduler_api" \
     --kafka_broker=localhost:9092 \
-    --mqtt_host=localhost \
     --postgres_host=localhost \
-    --listen=0.0.0.0:50102 \
+    --grpc_listen=0.0.0.0:50102 \
     > /tmp/ifex-logs/scheduler_api.log 2>&1 &
 echo $! > /tmp/ifex-pids/scheduler_api.pid
 log_info "  scheduler_api started (PID: $!, port 50102)"
@@ -195,6 +192,33 @@ if grep -q "Initial enrichment load complete" /tmp/ifex-logs/mqtt_kafka_bridge.l
     log_info "Bridge ready: $STATS"
 else
     log_warn "Bridge still loading enrichment data..."
+fi
+
+# Step 9: Start Fleet Dashboard
+log_info "Starting Fleet Dashboard..."
+
+DASHBOARD_DIR="$SCRIPT_DIR/../dashboard"
+if [ -d "$DASHBOARD_DIR" ]; then
+    cd "$DASHBOARD_DIR"
+
+    # Create venv if needed
+    if [ ! -d "venv" ]; then
+        log_info "  Creating Python virtual environment..."
+        python3 -m venv venv
+        source venv/bin/activate
+        pip install -q -r requirements.txt
+    else
+        source venv/bin/activate
+    fi
+
+    # Start dashboard in background
+    python fleet_api.py > /tmp/ifex-logs/fleet_dashboard.log 2>&1 &
+    echo $! > /tmp/ifex-pids/fleet_dashboard.pid
+    log_info "  fleet_dashboard started (PID: $!, port 5000)"
+
+    cd "$SCRIPT_DIR"
+else
+    log_warn "Dashboard directory not found: $DASHBOARD_DIR"
 fi
 
 echo ""

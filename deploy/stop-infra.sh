@@ -20,7 +20,7 @@ log_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
 log_info "Stopping IFEX Offboard Infrastructure..."
 
 # Stop services by PID
-for service in mqtt_kafka_bridge discovery_mirror scheduler_mirror enrichment_exporter dispatcher_api discovery_api scheduler_api; do
+for service in mqtt_kafka_bridge discovery_mirror scheduler_mirror enrichment_exporter dispatcher_api discovery_api scheduler_api fleet_dashboard; do
     pidfile="/tmp/ifex-pids/${service}.pid"
     if [ -f "$pidfile" ]; then
         pid=$(cat "$pidfile")
@@ -40,6 +40,7 @@ pkill -f "enrichment_exporter" 2>/dev/null || true
 pkill -f "dispatcher_api" 2>/dev/null || true
 pkill -f "discovery_api" 2>/dev/null || true
 pkill -f "scheduler_api" 2>/dev/null || true
+pkill -f "fleet_api.py" 2>/dev/null || true
 
 # Stop Docker if requested
 if [ "$KEEP_DOCKER" = false ]; then

@@ -387,6 +387,7 @@
         .form-group textarea {
             resize: vertical;
             font-family: monospace;
+            min-height: 150px;
         }
 
         .form-row {
@@ -421,25 +422,34 @@
 
         .result-box {
             background: #f8f9fa;
-            border: 1px solid #e9ecef;
-            border-radius: 4px;
-            padding: 0.75rem;
+            border: 2px solid #e9ecef;
+            border-radius: 8px;
+            padding: 1rem;
             font-family: monospace;
-            font-size: 0.8rem;
+            font-size: 0.9rem;
             white-space: pre-wrap;
-            word-break: break-all;
+            word-break: break-word;
+            margin-top: 1rem;
+            min-height: 80px;
+            max-height: 400px;
+            overflow-y: auto;
         }
 
         .result-box.success {
             background: #d4edda;
-            border-color: #c3e6cb;
+            border-color: #28a745;
             color: #155724;
         }
 
         .result-box.error {
             background: #f8d7da;
-            border-color: #f5c6cb;
+            border-color: #dc3545;
             color: #721c24;
+        }
+
+        #method-panel .panel-body {
+            max-height: none;
+            overflow: visible;
         }
 
         /* Tab Navigation */
@@ -668,12 +678,155 @@
             border-radius: 4px;
             padding: 0.75rem;
             margin-bottom: 0.75rem;
-            border-left: 3px solid #667eea;
+            border-left: 4px solid #667eea;
+        }
+
+        .job-card.confirmed {
+            border-left-color: #28a745;
+            background: #d4edda;
+        }
+
+        .job-card.sent {
+            border-left-color: #667eea;
+            background: #e8f0ff;
         }
 
         .job-card.pending {
             border-left-color: #ffc107;
             background: #fff9e6;
+        }
+
+        .sync-badge {
+            display: inline-block;
+            padding: 0.15rem 0.4rem;
+            border-radius: 3px;
+            font-size: 0.7rem;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .sync-badge.confirmed {
+            background: #28a745;
+            color: white;
+        }
+
+        .sync-badge.sent {
+            background: #667eea;
+            color: white;
+        }
+
+        .sync-badge.pending {
+            background: #ffc107;
+            color: #333;
+        }
+
+        .sync-badge.paused {
+            background: #6c757d;
+            color: white;
+        }
+
+        .sync-badge.active {
+            background: #28a745;
+            color: white;
+        }
+
+        .sync-badge.completed {
+            background: #17a2b8;
+            color: white;
+        }
+
+        .sync-badge.failed, .sync-badge.error {
+            background: #dc3545;
+            color: white;
+        }
+
+        /* Execution History */
+        .execution-list {
+            max-height: 200px;
+            overflow-y: auto;
+            font-size: 0.8rem;
+        }
+
+        .execution-item {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.5rem;
+            border-bottom: 1px solid #e9ecef;
+        }
+
+        .execution-item:last-child {
+            border-bottom: none;
+        }
+
+        .execution-time {
+            color: #666;
+            font-size: 0.75rem;
+            min-width: 140px;
+        }
+
+        .execution-status {
+            font-size: 0.7rem;
+            padding: 0.15rem 0.4rem;
+            border-radius: 3px;
+        }
+
+        .execution-status.success, .execution-status.completed {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .execution-status.failed, .execution-status.error {
+            background: #f8d7da;
+            color: #721c24;
+        }
+
+        .execution-status.running {
+            background: #cce5ff;
+            color: #004085;
+        }
+
+        .execution-duration {
+            color: #888;
+            font-size: 0.75rem;
+        }
+
+        .execution-error {
+            color: #dc3545;
+            font-size: 0.75rem;
+            margin-left: auto;
+            max-width: 200px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        /* Parameter Form */
+        .param-form-field {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .param-form-field label {
+            min-width: 120px;
+            font-size: 0.85rem;
+            color: #555;
+        }
+
+        .param-form-field input, .param-form-field select {
+            flex: 1;
+            padding: 0.35rem 0.5rem;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 0.85rem;
+        }
+
+        .no-executions {
+            color: #888;
+            font-style: italic;
+            padding: 0.5rem;
         }
 
         .job-card .job-title {
@@ -731,6 +884,137 @@
                 grid-template-columns: 1fr;
             }
         }
+
+        /* Schedule Calendar Modal Styles */
+        .schedule-modal-content {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .schedule-info {
+            padding: 1rem;
+            background: #f8f9fa;
+            border-bottom: 1px solid #e9ecef;
+        }
+
+        .schedule-job-summary {
+            display: flex;
+            flex-direction: column;
+            gap: 0.25rem;
+        }
+
+        .calendar-nav {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.75rem 1rem;
+            background: #f8f9fa;
+            border-bottom: 1px solid #e9ecef;
+        }
+
+        .week-calendar {
+            padding: 0.5rem;
+            overflow-x: auto;
+        }
+
+        .week-grid {
+            display: grid;
+            grid-template-columns: 60px repeat(7, 1fr);
+            gap: 1px;
+            background: #e9ecef;
+            border: 1px solid #e9ecef;
+            min-width: 700px;
+        }
+
+        .week-header {
+            background: #667eea;
+            color: white;
+            padding: 0.5rem;
+            text-align: center;
+            font-weight: 600;
+            font-size: 0.75rem;
+        }
+
+        .week-header.today {
+            background: #764ba2;
+        }
+
+        .week-header-date {
+            display: block;
+            font-size: 1rem;
+            margin-top: 0.25rem;
+        }
+
+        .time-label {
+            background: #f8f9fa;
+            padding: 0.25rem;
+            text-align: right;
+            font-size: 0.75rem;
+            color: #666;
+            border-right: 2px solid #e9ecef;
+        }
+
+        .time-slot {
+            background: white;
+            padding: 0.25rem;
+            min-height: 32px;
+            cursor: pointer;
+            transition: background 0.15s;
+            position: relative;
+        }
+
+        .time-slot:hover {
+            background: #e8f0ff;
+        }
+
+        .time-slot.selected {
+            background: #667eea;
+            color: white;
+        }
+
+        .time-slot.past {
+            background: #f0f0f0;
+            color: #999;
+            cursor: not-allowed;
+        }
+
+        .calendar-event {
+            font-size: 0.65rem;
+            padding: 2px 4px;
+            border-radius: 3px;
+            margin: 1px 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            cursor: pointer;
+        }
+
+        .calendar-event.confirmed {
+            background: #28a745;
+            color: white;
+        }
+
+        .calendar-event.sent {
+            background: #667eea;
+            color: white;
+        }
+
+        .calendar-event.pending {
+            background: #ffc107;
+            color: #333;
+        }
+
+        .calendar-event.paused {
+            background: #6c757d;
+            color: white;
+            text-decoration: line-through;
+            opacity: 0.7;
+        }
+
+        .schedule-options {
+            padding: 1rem;
+            border-top: 1px solid #e9ecef;
+        }
     </style>
 </head>
 <body>
@@ -740,7 +1024,7 @@
             <button class="tab-btn active" onclick="switchTab('fleet')">Fleet</button>
             <button class="tab-btn" onclick="switchTab('services')">Services</button>
             <button class="tab-btn" onclick="switchTab('calendar')">Calendar</button>
-            <button class="tab-btn" onclick="switchTab('dispatch')">Dispatch</button>
+            <button class="tab-btn" onclick="switchTab('results')">Job Results</button>
         </nav>
         <button class="refresh-btn" onclick="refreshAll()">Refresh</button>
     </header>
@@ -856,7 +1140,7 @@
                         <div id="json-view" style="display: none;">
                             <div class="form-group">
                                 <label>Parameters (JSON)</label>
-                                <textarea id="service-params-json" rows="6" style="font-family: monospace;">{}</textarea>
+                                <textarea id="service-params-json" rows="10" style="font-family: monospace;">{}</textarea>
                             </div>
                         </div>
 
@@ -883,83 +1167,68 @@
 
     <!-- Calendar Tab -->
     <div class="container tab-content" id="tab-calendar" style="display: none;">
-        <div class="calendar-layout">
-            <div class="calendar-sidebar">
-                <div class="panel">
-                    <div class="panel-header">Vehicles</div>
-                    <div class="panel-body">
-                        <div class="form-group" style="padding: 0.5rem;">
-                            <input type="text" id="calendar-vehicle-search" placeholder="Search vehicles..." onkeyup="searchCalendarVehicles()">
-                        </div>
-                        <div id="calendar-vehicle-list" style="max-height: 400px; overflow-y: auto;">
-                            <div class="loading">Loading...</div>
-                        </div>
-                    </div>
+        <div class="panel">
+            <div class="panel-header">
+                <div style="display: flex; align-items: center; gap: 1rem;">
+                    <span>Vehicle Calendar</span>
+                    <input type="text" id="calendar-vehicle-input" placeholder="Enter Vehicle ID (e.g. VIN00000000000001)"
+                           style="width: 300px; padding: 0.4rem 0.6rem; font-size: 0.875rem;">
+                    <button class="btn primary" onclick="loadVehicleCalendar()" style="padding: 0.4rem 0.8rem;">Load</button>
+                    <span class="badge" id="calendar-online-status" style="display: none;">--</span>
+                </div>
+                <div>
+                    <button class="btn" onclick="navigateCalendarWeek(-1)">&lt; Prev</button>
+                    <span id="calendar-week-label" style="margin: 0 1rem; font-weight: 600;">--</span>
+                    <button class="btn" onclick="navigateCalendarWeek(1)">Next &gt;</button>
                 </div>
             </div>
-            <div class="calendar-main">
-                <div class="panel">
-                    <div class="panel-header">
-                        <span>Calendar: <span id="calendar-vehicle-name">Select a vehicle</span></span>
-                        <div>
-                            <span class="badge" id="calendar-online-status">--</span>
-                            <button class="btn primary" onclick="openNewJobModal()" style="margin-left: 0.5rem; padding: 0.25rem 0.5rem;">+ New Job</button>
-                        </div>
-                    </div>
-                    <div class="panel-body" id="calendar-jobs" style="padding: 1rem;">
-                        <p style="color: #666; text-align: center;">Select a vehicle to view its calendar</p>
-                    </div>
-                </div>
+            <div class="panel-body" id="calendar-view" style="padding: 0.5rem;">
+                <p style="color: #666; text-align: center; padding: 2rem;">Enter a vehicle ID and click Load to view its calendar</p>
             </div>
         </div>
     </div>
 
-    <!-- Dispatch Tab -->
-    <div class="container tab-content" id="tab-dispatch" style="display: none;">
-        <div class="dispatch-layout">
-            <div class="panel" style="margin-bottom: 1rem;">
-                <div class="panel-header">Quick Actions</div>
-                <div class="panel-body" style="padding: 1rem;">
-                    <div class="form-group">
-                        <label>Target Vehicle</label>
-                        <input type="text" id="dispatch-vehicle" placeholder="VIN00000000000001">
-                    </div>
-                    <div class="quick-actions" id="quick-actions">
-                        <p style="color: #666;">Quick actions will appear here based on available services.</p>
-                    </div>
+    <!-- Job Results Tab -->
+    <div class="container tab-content" id="tab-results" style="display: none;">
+        <div class="panel">
+            <div class="panel-header">
+                <div style="display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;">
+                    <span>Job Execution Results</span>
+                    <input type="text" id="results-vehicle-filter" placeholder="Filter by Vehicle ID..." style="padding: 0.4rem 0.6rem; border: 1px solid #ddd; border-radius: 4px; width: 200px;">
+                    <select id="results-status-filter" style="padding: 0.4rem 0.6rem; border: 1px solid #ddd; border-radius: 4px;">
+                        <option value="">All Status</option>
+                        <option value="success">Success</option>
+                        <option value="completed">Completed</option>
+                        <option value="failed">Failed</option>
+                        <option value="error">Error</option>
+                        <option value="running">Running</option>
+                    </select>
+                    <button class="btn primary" onclick="loadExecutions()" style="padding: 0.4rem 0.8rem;">Load</button>
+                    <button class="btn" onclick="loadExecutions()" style="padding: 0.4rem 0.8rem;">Refresh</button>
                 </div>
+                <span id="results-count" style="color: #666; font-size: 0.875rem;"></span>
             </div>
-
-            <div class="panels">
-                <div class="panel">
-                    <div class="panel-header">Custom Command</div>
-                    <div class="panel-body" style="padding: 1rem;">
-                        <div class="form-row">
-                            <div class="form-group">
-                                <label>Service</label>
-                                <select id="dispatch-service" onchange="loadDispatchMethods()">
-                                    <option value="">Select service...</option>
-                                </select>
-                            </div>
-                            <div class="form-group">
-                                <label>Method</label>
-                                <select id="dispatch-method" onchange="loadDispatchParams()">
-                                    <option value="">Select method...</option>
-                                </select>
-                            </div>
-                        </div>
-                        <div id="dispatch-form"></div>
-                        <button class="btn primary" onclick="dispatchCommand()" style="margin-top: 1rem;">Execute</button>
-                        <div id="dispatch-result" style="margin-top: 1rem; display: none;"></div>
-                    </div>
-                </div>
-
-                <div class="panel">
-                    <div class="panel-header">Recent Commands</div>
-                    <div class="panel-body" id="recent-commands">
-                        <div class="loading">Loading...</div>
-                    </div>
-                </div>
+            <div class="panel-body" style="padding: 0; overflow-x: auto;">
+                <table class="data-table" id="results-table">
+                    <thead>
+                        <tr>
+                            <th>Time</th>
+                            <th>Vehicle</th>
+                            <th>Job</th>
+                            <th>Service.Method</th>
+                            <th>Status</th>
+                            <th>Duration</th>
+                            <th>Result / Error</th>
+                        </tr>
+                    </thead>
+                    <tbody id="results-tbody">
+                        <tr><td colspan="7" style="text-align: center; color: #666; padding: 2rem;">Click "Load" to fetch job execution results</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <div style="padding: 0.75rem; border-top: 1px solid #e9ecef; display: flex; justify-content: space-between; align-items: center;">
+                <button class="btn" onclick="loadMoreExecutions()" id="btn-load-more" style="display: none;">Load More</button>
+                <span id="results-pagination" style="color: #666; font-size: 0.875rem;"></span>
             </div>
         </div>
     </div>
@@ -977,6 +1246,145 @@
         </div>
     </div>
 
+    <!-- Schedule Calendar Modal -->
+    <div class="modal-overlay" id="schedule-modal">
+        <div class="modal" style="max-width: 900px;">
+            <div class="modal-header">
+                <h2>Schedule Job</h2>
+                <button class="modal-close" onclick="closeScheduleModal()">&times;</button>
+            </div>
+            <div class="modal-body" style="padding: 0;">
+                <div class="schedule-modal-content">
+                    <div class="schedule-info">
+                        <div class="schedule-job-summary">
+                            <strong id="schedule-job-title">--</strong>
+                            <span id="schedule-vehicle-id" style="color: #666; font-size: 0.875rem;"></span>
+                        </div>
+                    </div>
+                    <div class="calendar-nav">
+                        <button class="btn" onclick="navigateWeek(-1)">&lt; Previous</button>
+                        <span id="schedule-week-label" style="font-weight: 600;"></span>
+                        <button class="btn" onclick="navigateWeek(1)">Next &gt;</button>
+                    </div>
+                    <div class="week-calendar" id="week-calendar">
+                        <!-- Generated by JS -->
+                    </div>
+                    <div class="schedule-options" style="padding: 1rem; border-top: 1px solid #e9ecef;">
+                        <div class="form-row" style="gap: 1rem;">
+                            <div class="form-group" style="flex: 1;">
+                                <label>Recurrence (optional)</label>
+                                <select id="schedule-recurrence">
+                                    <option value="">One-time</option>
+                                    <option value="FREQ=DAILY">Daily</option>
+                                    <option value="FREQ=WEEKLY">Weekly</option>
+                                    <option value="FREQ=DAILY;BYDAY=MO,TU,WE,TH,FR">Weekdays</option>
+                                    <option value="FREQ=MONTHLY">Monthly</option>
+                                </select>
+                            </div>
+                            <div class="form-group" style="flex: 1;">
+                                <label>Selected Time</label>
+                                <input type="text" id="schedule-selected-time" readonly placeholder="Click a timeslot above">
+                            </div>
+                        </div>
+                        <div style="margin-top: 1rem; display: flex; gap: 0.5rem; justify-content: flex-end;">
+                            <button class="btn" onclick="closeScheduleModal()">Cancel</button>
+                            <button class="btn primary" onclick="confirmSchedule()" id="btn-confirm-schedule" disabled>Schedule Job</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Job Details Modal -->
+    <div class="modal-overlay" id="job-modal">
+        <div class="modal" style="max-width: 700px; max-height: 90vh; overflow-y: auto;">
+            <div class="modal-header">
+                <h2>Job Details</h2>
+                <button class="modal-close" onclick="closeJobModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="detail-section">
+                    <div class="detail-grid">
+                        <div class="detail-item">
+                            <div class="label">Job ID</div>
+                            <div class="value" id="job-detail-id" style="font-family: monospace; font-size: 0.75rem;">--</div>
+                        </div>
+                        <div class="detail-item">
+                            <div class="label">Status</div>
+                            <div class="value" id="job-detail-status-container">
+                                <span class="sync-badge" id="job-detail-sync">--</span>
+                                <span class="sync-badge" id="job-detail-job-status" style="margin-left: 0.25rem; display: none;">--</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="detail-section">
+                    <h3>Service Call</h3>
+                    <div class="detail-grid">
+                        <div class="detail-item">
+                            <div class="label">Service</div>
+                            <div class="value" id="job-detail-service">--</div>
+                        </div>
+                        <div class="detail-item">
+                            <div class="label">Method</div>
+                            <div class="value" id="job-detail-method">--</div>
+                        </div>
+                    </div>
+                    <div style="margin-top: 0.75rem;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                            <label style="font-weight: 500;">Parameters</label>
+                            <button class="btn" style="padding: 0.25rem 0.5rem; font-size: 0.75rem;" onclick="toggleParamView()">
+                                <span id="param-view-toggle">Show JSON</span>
+                            </button>
+                        </div>
+                        <div id="job-detail-params-form"></div>
+                        <textarea id="job-detail-params-json" rows="4" style="font-family: monospace; font-size: 0.8rem; display: none;"></textarea>
+                    </div>
+                </div>
+
+                <div class="detail-section">
+                    <h3>Schedule</h3>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Scheduled Time</label>
+                            <input type="datetime-local" id="job-detail-time">
+                        </div>
+                        <div class="form-group">
+                            <label>Recurrence</label>
+                            <select id="job-detail-recurrence">
+                                <option value="">One-time</option>
+                                <option value="FREQ=DAILY">Daily</option>
+                                <option value="FREQ=WEEKLY">Weekly</option>
+                                <option value="FREQ=DAILY;BYDAY=MO,TU,WE,TH,FR">Weekdays</option>
+                                <option value="FREQ=MONTHLY">Monthly</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Execution History Section -->
+                <div class="detail-section">
+                    <h3>Execution History</h3>
+                    <div id="job-executions-container">
+                        <div style="color: #666; font-size: 0.875rem;">Loading...</div>
+                    </div>
+                </div>
+
+                <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 1rem; padding-top: 1rem; border-top: 1px solid #e9ecef;">
+                    <button class="btn primary" onclick="updateJob()">Save Changes</button>
+                    <button class="btn" onclick="triggerJob()">Run Now</button>
+                    <button class="btn" onclick="togglePauseJob()" id="btn-pause-job">Pause</button>
+                    <div style="flex: 1;"></div>
+                    <button class="btn danger" onclick="deleteJobFromModal()">Delete</button>
+                </div>
+
+                <div id="job-modal-result" style="margin-top: 1rem; display: none;"></div>
+            </div>
+        </div>
+    </div>
+
     <script>
         const API_BASE = '';
         let currentPage = 1;
@@ -986,6 +1394,19 @@
             const response = await fetch(API_BASE + url);
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
             return response.json();
+        }
+
+        // Internal/infrastructure services to hide from user-facing displays
+        const INTERNAL_SERVICES = ['ifex_dispatcher', 'ifex_scheduler', 'ifex_discovery', 'backend_transport'];
+
+        function isUserFacingService(serviceName) {
+            return !INTERNAL_SERVICES.some(internal =>
+                serviceName.toLowerCase().includes(internal.toLowerCase())
+            );
+        }
+
+        function filterUserFacingServices(services) {
+            return services.filter(s => isUserFacingService(s.service_name));
         }
 
         async function loadStats() {
@@ -1013,7 +1434,8 @@
         async function loadServices() {
             try {
                 const data = await fetchJson('/api/services');
-                const html = data.services.map(s => `
+                const userServices = filterUserFacingServices(data.services);
+                const html = userServices.map(s => `
                     <div class="list-item">
                         <span>${s.service_name}</span>
                         <span class="badge primary">${s.vehicle_count} vehicles</span>
@@ -1101,6 +1523,7 @@
             try {
                 const data = await fetchJson(`/api/vehicles/${vehicleId}`);
                 const e = data.enrichment;
+                const userServices = filterUserFacingServices(data.services);
 
                 let html = `
                     <div class="detail-section">
@@ -1130,10 +1553,10 @@
                     </div>
 
                     <div class="detail-section">
-                        <h3>Registered Services (${data.services.length})</h3>
+                        <h3>Registered Services (${userServices.length})</h3>
                         <ul class="service-list">
-                            ${data.services.length > 0 ?
-                                data.services.map(s => `
+                            ${userServices.length > 0 ?
+                                userServices.map(s => `
                                     <li>
                                         <span>${s.service_name} ${s.version ? 'v' + s.version : ''}</span>
                                         <span class="badge">${s.status === 0 ? 'Available' : 'Status ' + s.status}</span>
@@ -1191,7 +1614,10 @@
 
         // Close modal on Escape
         document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape') closeModal();
+            if (e.key === 'Escape') {
+                closeModal();
+                closeScheduleModal();
+            }
         });
 
         // ===========================================
@@ -1214,10 +1640,11 @@
         function switchTab(tabName) {
             currentTab = tabName;
 
-            // Update tab buttons
+            // Update tab buttons - match by onclick attribute
             document.querySelectorAll('.tab-btn').forEach(btn => {
                 btn.classList.remove('active');
-                if (btn.textContent.toLowerCase() === tabName) {
+                const onclick = btn.getAttribute('onclick') || '';
+                if (onclick.includes(`'${tabName}'`)) {
                     btn.classList.add('active');
                 }
             });
@@ -1231,10 +1658,12 @@
             // Load data for the tab
             if (tabName === 'services') {
                 loadSchemas();
-            } else if (tabName === 'calendar') {
-                loadCalendarVehicles();
-            } else if (tabName === 'dispatch') {
-                loadDispatchServices();
+            } else if (tabName === 'results') {
+                // Auto-load results on first visit
+                const tbody = document.getElementById('results-tbody');
+                if (tbody && tbody.querySelector('td')?.textContent.includes('Click "Load"')) {
+                    loadExecutions();
+                }
             }
         }
 
@@ -1248,7 +1677,8 @@
         async function loadSchemas() {
             try {
                 const data = await fetchJson('/api/schemas');
-                schemasData = data.schemas;
+                // Filter out internal services and store for later use
+                schemasData = filterUserFacingServices(data.schemas);
 
                 const container = document.getElementById('schema-list');
 
@@ -1348,6 +1778,8 @@
             const type = param.datatype || param.type || 'string';
             const fieldId = prefix ? `${prefix}.${name}` : name;
             const description = param.description || '';
+            const defaultValue = param.default;
+            const constraints = param.constraints || {};
 
             // Get enum and struct definitions from schema (handle both old and new field names)
             const enumDefs = selectedSchema.enum_definitions || selectedSchema.enums || {};
@@ -1356,7 +1788,7 @@
             // Check if it's an enum (enum_definitions is object where key=typename, value=array of values)
             const enumValues = enumDefs[type];
             if (enumValues && Array.isArray(enumValues)) {
-                // New format: enum_definitions[type] = ["VALUE1", "VALUE2", ...]
+                // New format: enum_definitions[type] = ["NAME (value)", ...]
                 const isArray = type.endsWith('[]') || param.datatype?.includes('[]');
                 if (isArray) {
                     return `
@@ -1373,11 +1805,19 @@
                         </div>
                     `;
                 } else {
+                    // Find default option by matching numeric value
+                    const defaultIdx = defaultValue !== undefined ? defaultValue : 0;
                     return `
                         <div class="field-group">
                             <label>${name}${description ? ' - ' + description : ''}</label>
                             <select id="param-${fieldId}">
-                                ${enumValues.map(v => `<option value="${v}">${v}</option>`).join('')}
+                                ${enumValues.map((v, idx) => {
+                                    // Extract numeric value from "NAME (value)" format
+                                    const match = v.match(/\((\d+)\)$/);
+                                    const enumVal = match ? parseInt(match[1]) : idx;
+                                    const selected = enumVal === defaultIdx ? 'selected' : '';
+                                    return `<option value="${v}" ${selected}>${v}</option>`;
+                                }).join('')}
                             </select>
                         </div>
                     `;
@@ -1398,16 +1838,31 @@
             // Basic types
             const inputType = getInputType(type);
             const placeholder = description || '';
+
+            // Build attributes for input
+            let attrs = `type="${inputType}" id="param-${fieldId}"`;
+            if (inputType === 'number') {
+                attrs += ' step="any"';
+                if (constraints.min !== undefined) attrs += ` min="${constraints.min}"`;
+                if (constraints.max !== undefined) attrs += ` max="${constraints.max}"`;
+            }
+            if (defaultValue !== undefined && inputType !== 'checkbox') {
+                attrs += ` value="${defaultValue}"`;
+            }
+            if (inputType === 'checkbox' && defaultValue) {
+                attrs += ' checked';
+            }
+
             return `
                 <div class="field-group">
                     <label>${name} (${type})${description ? ' - ' + description : ''}</label>
-                    <input type="${inputType}" id="param-${fieldId}" ${inputType === 'number' ? 'step="any"' : ''} placeholder="${placeholder}">
+                    <input ${attrs} placeholder="${placeholder}">
                 </div>
             `;
         }
 
         function getInputType(type) {
-            if (['int32', 'uint32', 'int64', 'uint64', 'float', 'double', 'number'].includes(type)) {
+            if (['int8', 'uint8', 'int16', 'uint16', 'int32', 'uint32', 'int64', 'uint64', 'float', 'double', 'number'].includes(type)) {
                 return 'number';
             }
             if (type === 'boolean' || type === 'bool') {
@@ -1416,20 +1871,59 @@
             return 'text';
         }
 
+        // Helper to set nested value using dot notation path
+        function setNestedValue(obj, path, value) {
+            const parts = path.split('.');
+            let current = obj;
+            for (let i = 0; i < parts.length - 1; i++) {
+                if (!current[parts[i]]) {
+                    current[parts[i]] = {};
+                }
+                current = current[parts[i]];
+            }
+            current[parts[parts.length - 1]] = value;
+        }
+
         function getFormData() {
             const data = {};
             document.querySelectorAll('#dynamic-form input, #dynamic-form select').forEach(el => {
                 const id = el.id.replace('param-', '');
+                let value;
+
                 if (el.type === 'checkbox' && el.name) {
-                    // Multi-select checkbox
-                    if (!data[el.name]) data[el.name] = [];
-                    if (el.checked) data[el.name].push(el.value);
+                    // Multi-select checkbox - use name attribute for grouping
+                    const name = el.name.replace('param-', '');
+                    if (!data[name]) {
+                        setNestedValue(data, name, []);
+                    }
+                    if (el.checked) {
+                        // Get the array at the nested path and push to it
+                        const parts = name.split('.');
+                        let arr = data;
+                        for (const part of parts) {
+                            arr = arr[part];
+                        }
+                        arr.push(el.value);
+                    }
+                    return; // continue to next element
                 } else if (el.type === 'checkbox') {
-                    data[id] = el.checked;
+                    value = el.checked;
                 } else if (el.type === 'number') {
-                    data[id] = el.value ? parseFloat(el.value) : null;
+                    value = el.value ? parseFloat(el.value) : null;
                 } else {
-                    data[id] = el.value;
+                    // For select elements with enum values like "MEDIUM (1)", extract just the name
+                    if (el.tagName === 'SELECT' && el.value.includes(' (')) {
+                        value = el.value.split(' (')[0];
+                    } else {
+                        value = el.value;
+                    }
+                }
+
+                // Use dot notation to create nested structure
+                if (id.includes('.')) {
+                    setNestedValue(data, id, value);
+                } else {
+                    data[id] = value;
                 }
             });
             return data;
@@ -1464,7 +1958,7 @@
 
             const resultDiv = document.getElementById('service-result');
             resultDiv.style.display = 'block';
-            resultDiv.innerHTML = '<div class="result-box">Executing...</div>';
+            resultDiv.innerHTML = '<div class="result-box">Executing RPC...</div>';
 
             try {
                 const response = await fetch('/api/rpc', {
@@ -1475,48 +1969,270 @@
                         service_name: selectedSchema.service_name,
                         method_name: selectedMethod.name,
                         parameters: params,
-                        timeout_ms: 5000
+                        timeout_ms: 10000
                     })
                 });
 
                 const data = await response.json();
-                if (response.ok) {
-                    resultDiv.innerHTML = `<div class="result-box success">Dispatched!\nCorrelation ID: ${data.correlation_id}</div>`;
+                if (response.ok && data.status === 'success') {
+                    const resultStr = data.result ? JSON.stringify(data.result, null, 2) : '(no result)';
+                    resultDiv.innerHTML = `<div class="result-box success">
+<strong>✓ Success</strong> (${data.duration_ms}ms)
+<pre style="margin-top: 0.5rem; white-space: pre-wrap;">${resultStr}</pre>
+</div>`;
+                } else if (response.ok) {
+                    resultDiv.innerHTML = `<div class="result-box error">
+<strong>✗ ${data.status}</strong> (${data.duration_ms || 0}ms)
+${data.error || 'No error details'}
+</div>`;
                 } else {
                     resultDiv.innerHTML = `<div class="result-box error">Error: ${data.error}</div>`;
                 }
             } catch (err) {
                 resultDiv.innerHTML = `<div class="result-box error">Error: ${err.message}</div>`;
             }
+            // Scroll result into view
+            resultDiv.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
         }
 
-        async function openScheduleModal() {
-            const vehicleId = document.getElementById('service-vehicle').value;
-            if (!vehicleId) {
-                alert('Please enter a target vehicle ID');
-                return;
+        // ===========================================
+        // Shared Week Calendar Component
+        // ===========================================
+        let calendarJobs = [];  // Current vehicle's jobs for display
+
+        function renderWeekGrid(containerId, weekOffset, options = {}) {
+            const container = document.getElementById(containerId);
+            const now = new Date();
+
+            // Options
+            const selectable = options.selectable || false;
+            const selectedDateTime = options.selectedDateTime || null;
+            const labelId = options.labelId || null;
+            const onSelect = options.onSelect || null;
+
+            // Get start of week (Monday) for given offset
+            const weekStart = new Date(now);
+            weekStart.setDate(now.getDate() - now.getDay() + 1 + (weekOffset * 7));
+            weekStart.setHours(0, 0, 0, 0);
+
+            const weekEnd = new Date(weekStart);
+            weekEnd.setDate(weekStart.getDate() + 6);
+
+            // Update week label if provided
+            if (labelId) {
+                const opts = { month: 'short', day: 'numeric' };
+                document.getElementById(labelId).textContent =
+                    `${weekStart.toLocaleDateString('en-US', opts)} - ${weekEnd.toLocaleDateString('en-US', opts)}, ${weekStart.getFullYear()}`;
             }
 
-            // Build job data from current form
-            const params = document.getElementById('json-view').style.display === 'block'
-                ? JSON.parse(document.getElementById('service-params-json').value)
-                : getFormData();
+            // Index jobs by date-hour for quick lookup
+            const jobIndex = {};
+            (calendarJobs || []).forEach(job => {
+                if (!job.scheduled_time) return;
+                const jobDate = new Date(job.scheduled_time);
+                const key = `${jobDate.getFullYear()}-${jobDate.getMonth()}-${jobDate.getDate()}-${jobDate.getHours()}`;
+                if (!jobIndex[key]) jobIndex[key] = [];
+                jobIndex[key].push(job);
+            });
 
-            const title = `${selectedSchema.service_name}.${selectedMethod.name}`;
-            const recurrence = prompt('Recurrence rule (iCal RRULE, optional):', '');
+            // Build grid
+            const dayNames = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+            let html = '<div class="week-grid">';
 
-            // Schedule via API
+            // Header row
+            html += '<div class="week-header" style="background: #f8f9fa;"></div>';
+            for (let d = 0; d < 7; d++) {
+                const dayDate = new Date(weekStart);
+                dayDate.setDate(weekStart.getDate() + d);
+                const isToday = dayDate.toDateString() === now.toDateString();
+                html += `<div class="week-header ${isToday ? 'today' : ''}">
+                    ${dayNames[d]}
+                    <span class="week-header-date">${dayDate.getDate()}</span>
+                </div>`;
+            }
+
+            // Time rows (6 AM to 10 PM)
+            for (let hour = 6; hour <= 22; hour++) {
+                const timeStr = hour < 12 ? `${hour}AM` : (hour === 12 ? '12PM' : `${hour - 12}PM`);
+                html += `<div class="time-label">${timeStr}</div>`;
+
+                for (let d = 0; d < 7; d++) {
+                    const slotDate = new Date(weekStart);
+                    slotDate.setDate(weekStart.getDate() + d);
+                    slotDate.setHours(hour, 0, 0, 0);
+
+                    const isPast = slotDate < now;
+                    const isSelected = selectedDateTime && selectedDateTime.getTime() === slotDate.getTime();
+                    const key = `${slotDate.getFullYear()}-${slotDate.getMonth()}-${slotDate.getDate()}-${hour}`;
+                    const slotJobs = jobIndex[key] || [];
+
+                    const classes = ['time-slot'];
+                    if (isPast && selectable) classes.push('past');
+                    if (isSelected) classes.push('selected');
+
+                    const dateStr = slotDate.toISOString();
+                    const clickHandler = selectable ? `onclick="handleTimeSlotClick('${dateStr}')"` : '';
+
+                    // Render job events in slot
+                    let jobsHtml = slotJobs.map((job, idx) => {
+                        const jobIdx = calendarJobs.indexOf(job);
+                        const statusClass = job.job_status === 'paused' ? 'paused' : (job.sync_state || '');
+                        const statusLabel = job.job_status === 'paused' ? ' (paused)' : '';
+                        const displayTitle = (job.title || job.service_name + '.' + job.method_name).replace(/"/g, '&quot;');
+                        return `
+                        <div class="calendar-event ${statusClass}"
+                             title="${displayTitle}${statusLabel}"
+                             data-job-index="${jobIdx}"
+                             style="cursor: pointer; position: relative; z-index: 10;">
+                            ${displayTitle}
+                        </div>`;
+                    }).join('');
+
+                    html += `<div class="${classes.join(' ')}" ${clickHandler} data-datetime="${dateStr}">${jobsHtml}</div>`;
+                }
+            }
+
+            html += '</div>';
+            container.innerHTML = html;
+        }
+
+        // ===========================================
+        // Schedule Calendar Modal
+        // ===========================================
+        let scheduleWeekOffset = 0;
+        let scheduleSelectedDateTime = null;
+        let scheduleJobData = null;
+
+        async function openScheduleModal() {
             try {
-                const response = await fetch('/api/schedule', {
+                const vehicleId = document.getElementById('service-vehicle').value;
+                if (!vehicleId) {
+                    alert('Please enter a target vehicle ID');
+                    return;
+                }
+
+                if (!selectedSchema || !selectedMethod) {
+                    alert('Please select a service and method first');
+                    return;
+                }
+
+                // Build job data from current form
+                let params;
+                try {
+                    params = document.getElementById('json-view').style.display === 'block'
+                        ? JSON.parse(document.getElementById('service-params-json').value)
+                        : getFormData();
+                } catch (e) {
+                    alert('Invalid JSON parameters: ' + e.message);
+                    return;
+                }
+
+                const title = `${selectedSchema.service_name}.${selectedMethod.name}`;
+
+                scheduleJobData = {
+                    vehicle_id: vehicleId,
+                    title: title,
+                    service_name: selectedSchema.service_name,
+                    method_name: selectedMethod.name,
+                    parameters: params
+                };
+
+                // Update modal UI
+                document.getElementById('schedule-job-title').textContent = title;
+                document.getElementById('schedule-vehicle-id').textContent = vehicleId;
+                document.getElementById('schedule-selected-time').value = '';
+                document.getElementById('schedule-recurrence').value = '';
+                document.getElementById('btn-confirm-schedule').disabled = true;
+
+                scheduleWeekOffset = 0;
+                scheduleSelectedDateTime = null;
+
+                // Load existing jobs for this vehicle (don't block if it fails)
+                try {
+                    const data = await fetchJson(`/api/calendar/${vehicleId}`);
+                    calendarJobs = data.calendar || [];
+                } catch {
+                    calendarJobs = [];
+                }
+
+                renderScheduleCalendar();
+                document.getElementById('schedule-modal').classList.add('active');
+            } catch (err) {
+                console.error('Error opening schedule modal:', err);
+                alert('Error opening schedule modal: ' + err.message);
+            }
+        }
+
+        function closeScheduleModal() {
+            document.getElementById('schedule-modal').classList.remove('active');
+            scheduleJobData = null;
+            scheduleSelectedDateTime = null;
+        }
+
+        function navigateWeek(direction) {
+            scheduleWeekOffset += direction;
+            if (scheduleWeekOffset < 0) scheduleWeekOffset = 0;
+            renderScheduleCalendar();
+        }
+
+        function renderScheduleCalendar() {
+            renderWeekGrid('week-calendar', scheduleWeekOffset, {
+                selectable: true,
+                selectedDateTime: scheduleSelectedDateTime,
+                labelId: 'schedule-week-label'
+            });
+        }
+
+        function handleTimeSlotClick(dateTimeStr) {
+            const slotDate = new Date(dateTimeStr);
+            const now = new Date();
+
+            if (slotDate < now) return;
+
+            scheduleSelectedDateTime = slotDate;
+
+            // Update slot styles
+            document.querySelectorAll('#week-calendar .time-slot').forEach(el => {
+                el.classList.remove('selected');
+                if (el.dataset.datetime === dateTimeStr) {
+                    el.classList.add('selected');
+                }
+            });
+
+            // Update selected time display
+            document.getElementById('schedule-selected-time').value =
+                slotDate.toLocaleDateString('en-US', {
+                    weekday: 'short', month: 'short', day: 'numeric',
+                    hour: 'numeric', minute: '2-digit', hour12: true
+                });
+
+            document.getElementById('btn-confirm-schedule').disabled = false;
+        }
+
+        async function confirmSchedule() {
+            if (!scheduleSelectedDateTime || !scheduleJobData) return;
+
+            const recurrence = document.getElementById('schedule-recurrence').value;
+            const vehicleId = scheduleJobData.vehicle_id;
+
+            const schedStr = scheduleSelectedDateTime.toLocaleDateString('en-US', {
+                weekday: 'short', month: 'short', day: 'numeric',
+                hour: 'numeric', minute: '2-digit'
+            });
+            const scheduledTimeISO = scheduleSelectedDateTime.toISOString();
+
+            try {
+                const response = await fetch(`/api/calendar/${vehicleId}`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        vehicle_id: vehicleId,
-                        title: title,
-                        service_name: selectedSchema.service_name,
-                        method_name: selectedMethod.name,
-                        parameters: params,
-                        recurrence_rule: recurrence || null
+                        title: scheduleJobData.title,
+                        service_name: scheduleJobData.service_name,
+                        method_name: scheduleJobData.method_name,
+                        parameters: scheduleJobData.parameters,
+                        scheduled_time: scheduledTimeISO,
+                        recurrence_rule: recurrence || null,
+                        created_by: 'fleet_dashboard'
                     })
                 });
 
@@ -1525,112 +2241,203 @@
                 resultDiv.style.display = 'block';
 
                 if (response.ok) {
-                    resultDiv.innerHTML = `<div class="result-box success">Job Scheduled!\nJob ID: ${data.job_id}</div>`;
+                    closeScheduleModal();
+                    const syncInfo = data.vehicle_online ? 'Synced to vehicle' : 'Queued (vehicle offline)';
+                    resultDiv.innerHTML = `<div class="result-box success">Job Scheduled!
+Job ID: ${data.job_id}
+Scheduled: ${schedStr}${recurrence ? '\nRecurrence: ' + recurrence : ''}
+Status: ${syncInfo}</div>`;
                 } else {
                     resultDiv.innerHTML = `<div class="result-box error">Error: ${data.error}</div>`;
                 }
+                resultDiv.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
             } catch (err) {
                 alert('Error: ' + err.message);
             }
         }
 
-        // ===========================================
-        // Calendar Functions
-        // ===========================================
-        let calendarVehicles = [];
-        let selectedCalendarVehicle = null;
-
-        async function loadCalendarVehicles() {
-            try {
-                const data = await fetchJson('/api/vehicles?per_page=100');
-                calendarVehicles = data.vehicles;
-
-                renderCalendarVehicleList(calendarVehicles);
-            } catch (err) {
-                console.error('Failed to load calendar vehicles:', err);
+        document.getElementById('schedule-modal').addEventListener('click', (e) => {
+            if (e.target.classList.contains('modal-overlay')) {
+                closeScheduleModal();
             }
-        }
+        });
 
-        function renderCalendarVehicleList(vehicles) {
-            const container = document.getElementById('calendar-vehicle-list');
-            if (vehicles.length === 0) {
-                container.innerHTML = '<div class="list-item">No vehicles found</div>';
+        // ===========================================
+        // Calendar Tab Functions
+        // ===========================================
+        let selectedCalendarVehicle = null;
+        let calendarTabWeekOffset = 0;
+
+        async function loadVehicleCalendar() {
+            const vehicleId = document.getElementById('calendar-vehicle-input').value.trim();
+            if (!vehicleId) {
+                alert('Please enter a vehicle ID');
                 return;
             }
 
-            container.innerHTML = vehicles.map(v => `
-                <div class="calendar-vehicle-item ${selectedCalendarVehicle === v.vehicle_id ? 'selected' : ''}"
-                     onclick="selectCalendarVehicle('${v.vehicle_id}')">
-                    <span>${v.vehicle_id}</span>
-                    <span class="online-dot" title="Status unknown"></span>
-                </div>
-            `).join('');
-        }
-
-        function searchCalendarVehicles() {
-            const search = document.getElementById('calendar-vehicle-search').value.toLowerCase();
-            const filtered = calendarVehicles.filter(v =>
-                v.vehicle_id.toLowerCase().includes(search)
-            );
-            renderCalendarVehicleList(filtered);
-        }
-
-        async function selectCalendarVehicle(vehicleId) {
             selectedCalendarVehicle = vehicleId;
+            calendarTabWeekOffset = 0;
+            const container = document.getElementById('calendar-view');
+            container.innerHTML = '<div class="loading">Loading calendar...</div>';
 
-            // Update selection UI
-            document.querySelectorAll('.calendar-vehicle-item').forEach(el => {
-                el.classList.toggle('selected', el.textContent.includes(vehicleId));
-            });
-
-            document.getElementById('calendar-vehicle-name').textContent = vehicleId;
-
-            // Load calendar data
             try {
                 const data = await fetchJson(`/api/calendar/${vehicleId}`);
+                calendarJobs = data.calendar || [];
 
                 // Update online status
                 const statusBadge = document.getElementById('calendar-online-status');
-                if (data.vehicle_online) {
-                    statusBadge.textContent = 'Online';
-                    statusBadge.className = 'badge success';
-                } else {
-                    statusBadge.textContent = 'Offline';
-                    statusBadge.className = 'badge';
-                }
+                statusBadge.style.display = 'inline';
+                statusBadge.textContent = data.vehicle_online ? 'Online' : 'Offline';
+                statusBadge.className = data.vehicle_online ? 'badge success' : 'badge';
 
-                // Render jobs
-                renderCalendarJobs(data);
+                renderCalendarTab();
 
             } catch (err) {
                 console.error('Failed to load calendar:', err);
+                container.innerHTML = `<div class="error">Failed to load calendar: ${err.message}</div>`;
             }
         }
 
-        function renderCalendarJobs(data) {
-            const container = document.getElementById('calendar-jobs');
-            const allJobs = [...(data.jobs || []), ...(data.pending || [])];
+        function navigateCalendarWeek(direction) {
+            calendarTabWeekOffset += direction;
+            renderCalendarTab();
+        }
 
-            if (allJobs.length === 0) {
-                container.innerHTML = '<p style="color: #666; text-align: center;">No scheduled jobs</p>';
-                return;
+        function renderCalendarTab() {
+            renderWeekGrid('calendar-view', calendarTabWeekOffset, {
+                selectable: false,
+                labelId: 'calendar-week-label'
+            });
+        }
+
+        // Enter key to load calendar
+        document.addEventListener('DOMContentLoaded', () => {
+            const input = document.getElementById('calendar-vehicle-input');
+            if (input) {
+                input.addEventListener('keypress', (e) => {
+                    if (e.key === 'Enter') loadVehicleCalendar();
+                });
+            }
+            // Enter key to load results
+            const resultsInput = document.getElementById('results-vehicle-filter');
+            if (resultsInput) {
+                resultsInput.addEventListener('keypress', (e) => {
+                    if (e.key === 'Enter') loadExecutions();
+                });
+            }
+        });
+
+        // ===========================================
+        // Job Results Tab
+        // ===========================================
+        let executionsOffset = 0;
+        const executionsLimit = 50;
+
+        async function loadExecutions(append = false) {
+            const vehicleId = document.getElementById('results-vehicle-filter').value.trim();
+            const status = document.getElementById('results-status-filter').value;
+
+            if (!append) {
+                executionsOffset = 0;
             }
 
-            container.innerHTML = allJobs.map(job => `
-                <div class="job-card ${job.source === 'offboard' ? 'pending' : ''}">
-                    <div class="job-title">${job.title || job.job_id}</div>
-                    <div class="job-meta">
-                        <div>${job.service_name}.${job.method_name}</div>
-                        <div>Scheduled: ${job.scheduled_time || 'Not set'}</div>
-                        ${job.recurrence_rule ? `<div>Recurrence: ${job.recurrence_rule}</div>` : ''}
-                        ${job.wake_policy === 1 ? '<div>Wake: Required (lead: ' + job.wake_lead_time_s + 's)</div>' : ''}
-                        <div>Status: ${job.status} ${job.sync_status ? '(' + job.sync_status + ')' : ''}</div>
-                    </div>
-                    <div class="job-actions">
-                        <button class="btn" onclick="deleteJob('${data.vehicle_id}', '${job.job_id}')" style="padding: 0.25rem 0.5rem; font-size: 0.75rem;">Delete</button>
-                    </div>
-                </div>
-            `).join('');
+            const tbody = document.getElementById('results-tbody');
+            if (!append) {
+                tbody.innerHTML = '<tr><td colspan="7" style="text-align: center; padding: 1rem;">Loading...</td></tr>';
+            }
+
+            try {
+                let url = `/api/executions?limit=${executionsLimit}&offset=${executionsOffset}`;
+                if (vehicleId) url += `&vehicle_id=${encodeURIComponent(vehicleId)}`;
+                if (status) url += `&status=${encodeURIComponent(status)}`;
+
+                const data = await fetchJson(url);
+                const executions = data.executions || [];
+
+                if (!append) {
+                    tbody.innerHTML = '';
+                }
+
+                if (executions.length === 0 && !append) {
+                    tbody.innerHTML = '<tr><td colspan="7" style="text-align: center; color: #666; padding: 2rem;">No job executions found</td></tr>';
+                } else {
+                    for (const exec of executions) {
+                        const row = document.createElement('tr');
+                        const execTime = exec.executed_at_ms
+                            ? new Date(exec.executed_at_ms).toLocaleString()
+                            : '--';
+                        const statusClass = getStatusClass(exec.status);
+                        const duration = exec.duration_ms ? `${exec.duration_ms}ms` : '--';
+                        const jobTitle = exec.job_title || exec.job_id?.substring(0, 8) || '--';
+                        const serviceMethod = exec.service_name && exec.method_name
+                            ? `${exec.service_name}.${exec.method_name}`
+                            : '--';
+
+                        // Format result/error
+                        let resultHtml = '--';
+                        if (exec.error_message) {
+                            resultHtml = `<span style="color: #dc3545;" title="${escapeHtml(exec.error_message)}">${escapeHtml(exec.error_message.substring(0, 50))}${exec.error_message.length > 50 ? '...' : ''}</span>`;
+                        } else if (exec.result_json) {
+                            try {
+                                const resultObj = typeof exec.result_json === 'string' ? JSON.parse(exec.result_json) : exec.result_json;
+                                const resultStr = JSON.stringify(resultObj);
+                                resultHtml = `<code style="font-size: 0.75rem; cursor: pointer;" title="${escapeHtml(resultStr)}" onclick="showResultModal(this)">${escapeHtml(resultStr.substring(0, 60))}${resultStr.length > 60 ? '...' : ''}</code>`;
+                            } catch {
+                                resultHtml = `<code style="font-size: 0.75rem;">${escapeHtml(String(exec.result_json).substring(0, 60))}</code>`;
+                            }
+                        }
+
+                        row.innerHTML = `
+                            <td style="white-space: nowrap;">${execTime}</td>
+                            <td><code style="font-size: 0.75rem;">${exec.vehicle_id || '--'}</code></td>
+                            <td title="${exec.job_id || ''}">${jobTitle}</td>
+                            <td>${serviceMethod}</td>
+                            <td><span class="execution-status ${statusClass}">${exec.status || '--'}</span></td>
+                            <td>${duration}</td>
+                            <td style="max-width: 300px; overflow: hidden; text-overflow: ellipsis;">${resultHtml}</td>
+                        `;
+                        tbody.appendChild(row);
+                    }
+                }
+
+                // Update count and pagination
+                document.getElementById('results-count').textContent = `${data.total} total executions`;
+                const showing = executionsOffset + executions.length;
+                document.getElementById('results-pagination').textContent = `Showing ${showing} of ${data.total}`;
+
+                // Show/hide load more button
+                const loadMoreBtn = document.getElementById('btn-load-more');
+                if (showing < data.total) {
+                    loadMoreBtn.style.display = 'inline-block';
+                    executionsOffset = showing;
+                } else {
+                    loadMoreBtn.style.display = 'none';
+                }
+
+            } catch (err) {
+                console.error('Failed to load executions:', err);
+                tbody.innerHTML = `<tr><td colspan="7" style="text-align: center; color: #dc3545; padding: 2rem;">Error: ${err.message}</td></tr>`;
+            }
+        }
+
+        function loadMoreExecutions() {
+            loadExecutions(true);
+        }
+
+        function getStatusClass(status) {
+            if (!status) return '';
+            const s = status.toLowerCase();
+            if (s === 'success' || s === 'completed') return 'success';
+            if (s === 'failed' || s === 'error') return 'failed';
+            if (s === 'running') return 'running';
+            return '';
+        }
+
+        function showResultModal(element) {
+            const fullResult = element.getAttribute('title');
+            if (fullResult) {
+                alert(fullResult);  // Simple modal for now, could be improved
+            }
         }
 
         async function deleteJob(vehicleId, jobId) {
@@ -1641,7 +2448,7 @@
                 const data = await response.json();
 
                 if (response.ok) {
-                    selectCalendarVehicle(vehicleId); // Reload
+                    loadVehicleCalendar();
                 } else {
                     alert('Error: ' + data.error);
                 }
@@ -1650,101 +2457,329 @@
             }
         }
 
-        function openNewJobModal() {
-            if (!selectedCalendarVehicle) {
-                alert('Please select a vehicle first');
+        // ===========================================
+        // Job Details Modal
+        // ===========================================
+        let currentJob = null;
+        let showJsonView = false;
+
+        async function openJobModal(jobIndex) {
+            const job = calendarJobs[jobIndex];
+            if (!job) {
+                alert('Job not found');
                 return;
             }
 
-            // Pre-fill and switch to services tab
-            document.getElementById('service-vehicle').value = selectedCalendarVehicle;
-            switchTab('services');
+            currentJob = job;
+            showJsonView = false;
+
+            // Populate modal fields
+            document.getElementById('job-detail-id').textContent = job.job_id;
+            document.getElementById('job-detail-service').textContent = job.service_name;
+            document.getElementById('job-detail-method').textContent = job.method_name;
+
+            // Sync status badge
+            const syncEl = document.getElementById('job-detail-sync');
+            syncEl.textContent = job.sync_state || 'unknown';
+            syncEl.className = `sync-badge ${job.sync_state || ''}`;
+
+            // Job status badge (paused, active, etc.)
+            const jobStatusEl = document.getElementById('job-detail-job-status');
+            const jobStatus = job.job_status || job.status;
+            if (jobStatus && jobStatus !== 'pending' && jobStatus !== 'active') {
+                jobStatusEl.textContent = jobStatus;
+                jobStatusEl.className = `sync-badge ${jobStatus}`;
+                jobStatusEl.style.display = 'inline-block';
+            } else {
+                jobStatusEl.style.display = 'none';
+            }
+
+            // Parameters - render as form
+            renderParamForm(job.parameters);
+
+            // Scheduled time (convert to datetime-local format)
+            if (job.scheduled_time) {
+                try {
+                    const dt = new Date(job.scheduled_time);
+                    const localStr = dt.toISOString().slice(0, 16);
+                    document.getElementById('job-detail-time').value = localStr;
+                } catch {
+                    document.getElementById('job-detail-time').value = '';
+                }
+            } else {
+                document.getElementById('job-detail-time').value = '';
+            }
+
+            // Recurrence
+            const recurrenceEl = document.getElementById('job-detail-recurrence');
+            recurrenceEl.value = job.recurrence_rule || '';
+
+            // Pause button label
+            const isPaused = job.job_status === 'paused' || job.status === 'paused';
+            document.getElementById('btn-pause-job').textContent = isPaused ? 'Resume' : 'Pause';
+
+            // Clear previous result
+            document.getElementById('job-modal-result').style.display = 'none';
+
+            // Show modal
+            document.getElementById('job-modal').classList.add('active');
+
+            // Load execution history
+            loadJobExecutions(selectedCalendarVehicle, job.job_id);
         }
 
-        // ===========================================
-        // Dispatch Functions
-        // ===========================================
+        function renderParamForm(parameters) {
+            let params = {};
+            if (parameters) {
+                try {
+                    params = typeof parameters === 'string' ? JSON.parse(parameters) : parameters;
+                } catch {
+                    params = {};
+                }
+            }
 
-        async function loadDispatchServices() {
+            const formContainer = document.getElementById('job-detail-params-form');
+            const jsonTextarea = document.getElementById('job-detail-params-json');
+
+            // Store JSON representation
+            jsonTextarea.value = JSON.stringify(params, null, 2);
+
+            // Build form fields
+            const keys = Object.keys(params);
+            if (keys.length === 0) {
+                formContainer.innerHTML = '<div class="no-executions">No parameters</div>';
+                return;
+            }
+
+            let formHtml = '';
+            for (const key of keys) {
+                const value = params[key];
+                const valueStr = typeof value === 'object' ? JSON.stringify(value) : String(value);
+                const inputType = typeof value === 'number' ? 'number' : 'text';
+
+                formHtml += `
+                    <div class="param-form-field">
+                        <label>${key}</label>
+                        <input type="${inputType}" name="param_${key}" value="${escapeHtml(valueStr)}" data-key="${key}">
+                    </div>
+                `;
+            }
+            formContainer.innerHTML = formHtml;
+
+            // Update toggle button text
+            document.getElementById('param-view-toggle').textContent = 'Show JSON';
+            formContainer.style.display = 'block';
+            jsonTextarea.style.display = 'none';
+        }
+
+        function escapeHtml(str) {
+            return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        }
+
+        function toggleParamView() {
+            showJsonView = !showJsonView;
+            const formContainer = document.getElementById('job-detail-params-form');
+            const jsonTextarea = document.getElementById('job-detail-params-json');
+            const toggleBtn = document.getElementById('param-view-toggle');
+
+            if (showJsonView) {
+                // Sync form values to JSON before switching
+                syncFormToJson();
+                formContainer.style.display = 'none';
+                jsonTextarea.style.display = 'block';
+                toggleBtn.textContent = 'Show Form';
+            } else {
+                // Sync JSON to form before switching
+                try {
+                    const params = JSON.parse(jsonTextarea.value);
+                    renderParamForm(params);
+                } catch (e) {
+                    alert('Invalid JSON: ' + e.message);
+                    showJsonView = true;
+                    return;
+                }
+            }
+        }
+
+        function syncFormToJson() {
+            const formContainer = document.getElementById('job-detail-params-form');
+            const jsonTextarea = document.getElementById('job-detail-params-json');
+            const inputs = formContainer.querySelectorAll('input[data-key]');
+
+            let params = {};
             try {
-                const data = await fetchJson('/api/schemas');
-                const select = document.getElementById('dispatch-service');
-                select.innerHTML = '<option value="">Select service...</option>' +
-                    data.schemas.map(s => `<option value="${s.service_name}">${s.service_name}</option>`).join('');
+                params = JSON.parse(jsonTextarea.value);
+            } catch {}
+
+            inputs.forEach(input => {
+                const key = input.dataset.key;
+                let value = input.value;
+                // Try to parse as number or JSON
+                if (input.type === 'number') {
+                    value = parseFloat(value) || 0;
+                } else {
+                    try {
+                        value = JSON.parse(value);
+                    } catch {
+                        // Keep as string
+                    }
+                }
+                params[key] = value;
+            });
+
+            jsonTextarea.value = JSON.stringify(params, null, 2);
+        }
+
+        function getParamsFromModal() {
+            // Always sync form to JSON first if in form view
+            if (!showJsonView) {
+                syncFormToJson();
+            }
+            const jsonTextarea = document.getElementById('job-detail-params-json');
+            return JSON.parse(jsonTextarea.value);
+        }
+
+        async function loadJobExecutions(vehicleId, jobId) {
+            const container = document.getElementById('job-executions-container');
+            container.innerHTML = '<div style="color: #666; font-size: 0.875rem;">Loading...</div>';
+
+            try {
+                const response = await fetch(`/api/jobs/${vehicleId}/${jobId}/executions?limit=10`);
+                if (!response.ok) {
+                    container.innerHTML = '<div class="no-executions">No execution history available</div>';
+                    return;
+                }
+
+                const data = await response.json();
+                const executions = data.executions || [];
+
+                if (executions.length === 0) {
+                    container.innerHTML = '<div class="no-executions">No executions yet</div>';
+                    return;
+                }
+
+                let html = '<div class="execution-list">';
+                for (const exec of executions) {
+                    const execTime = exec.executed_at_ms
+                        ? new Date(exec.executed_at_ms).toLocaleString()
+                        : 'Unknown';
+                    const status = exec.status || 'unknown';
+                    const duration = exec.duration_ms ? `${exec.duration_ms}ms` : '';
+
+                    html += `
+                        <div class="execution-item">
+                            <span class="execution-time">${execTime}</span>
+                            <span class="execution-status ${status}">${status}</span>
+                            ${duration ? `<span class="execution-duration">${duration}</span>` : ''}
+                            ${exec.error_message ? `<span class="execution-error" title="${escapeHtml(exec.error_message)}">${escapeHtml(exec.error_message)}</span>` : ''}
+                        </div>
+                    `;
+                }
+                html += '</div>';
+                container.innerHTML = html;
 
             } catch (err) {
-                console.error('Failed to load dispatch services:', err);
+                container.innerHTML = `<div class="no-executions">Error loading executions: ${err.message}</div>`;
             }
         }
 
-        function loadDispatchMethods() {
-            const serviceName = document.getElementById('dispatch-service').value;
-            const select = document.getElementById('dispatch-method');
-
-            if (!serviceName) {
-                select.innerHTML = '<option value="">Select method...</option>';
-                return;
-            }
-
-            const schema = schemasData.find(s => s.service_name === serviceName);
-            if (!schema) return;
-
-            const methods = schema.methods || [];
-            select.innerHTML = '<option value="">Select method...</option>' +
-                methods.map(m => `<option value="${m.name}">${m.name}</option>`).join('');
+        function closeJobModal() {
+            document.getElementById('job-modal').classList.remove('active');
+            currentJob = null;
         }
 
-        function loadDispatchParams() {
-            // Could build a dynamic form here too
-            document.getElementById('dispatch-form').innerHTML =
-                '<div class="form-group"><label>Parameters (JSON)</label><textarea id="dispatch-params-json" rows="3">{}</textarea></div>';
-        }
+        async function sendJobCommand(commandType, extraData = {}) {
+            if (!currentJob || !selectedCalendarVehicle) return;
 
-        async function dispatchCommand() {
-            const vehicleId = document.getElementById('dispatch-vehicle').value;
-            const serviceName = document.getElementById('dispatch-service').value;
-            const methodName = document.getElementById('dispatch-method').value;
-            const paramsText = document.getElementById('dispatch-params-json')?.value || '{}';
-
-            if (!vehicleId || !serviceName || !methodName) {
-                alert('Please fill in all fields');
-                return;
-            }
-
-            const resultDiv = document.getElementById('dispatch-result');
-            resultDiv.style.display = 'block';
-            resultDiv.innerHTML = '<div class="result-box">Dispatching...</div>';
+            const command = {
+                command_type: commandType,
+                job_id: currentJob.job_id,
+                ...extraData
+            };
 
             try {
-                const response = await fetch('/api/rpc', {
+                const response = await fetch(`/api/calendar/${selectedCalendarVehicle}/command`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        vehicle_id: vehicleId,
-                        service_name: serviceName,
-                        method_name: methodName,
-                        parameters: JSON.parse(paramsText),
-                        timeout_ms: 5000
-                    })
+                    body: JSON.stringify(command)
                 });
 
                 const data = await response.json();
+                const resultDiv = document.getElementById('job-modal-result');
+                resultDiv.style.display = 'block';
+
                 if (response.ok) {
-                    resultDiv.innerHTML = `<div class="result-box success">Dispatched!\nCorrelation ID: ${data.correlation_id}</div>`;
-                    loadRecentCommands();
+                    resultDiv.innerHTML = `<div class="result-box success">Command sent: ${commandType}</div>`;
+                    // Reload calendar after a short delay
+                    setTimeout(() => {
+                        loadVehicleCalendar();
+                        closeJobModal();
+                    }, 1000);
                 } else {
                     resultDiv.innerHTML = `<div class="result-box error">Error: ${data.error}</div>`;
                 }
             } catch (err) {
+                const resultDiv = document.getElementById('job-modal-result');
+                resultDiv.style.display = 'block';
                 resultDiv.innerHTML = `<div class="result-box error">Error: ${err.message}</div>`;
             }
         }
 
-        async function loadRecentCommands() {
-            // This would need a /api/rpc/recent endpoint
-            document.getElementById('recent-commands').innerHTML =
-                '<div class="list-item" style="color: #666;">Recent commands will appear here</div>';
+        async function updateJob() {
+            if (!currentJob) return;
+
+            const newTime = document.getElementById('job-detail-time').value;
+            const newRecurrence = document.getElementById('job-detail-recurrence').value;
+            let newParams;
+
+            try {
+                newParams = getParamsFromModal();
+            } catch (e) {
+                alert('Invalid parameters: ' + e.message);
+                return;
+            }
+
+            await sendJobCommand('UPDATE_JOB', {
+                scheduled_time: newTime ? new Date(newTime).toISOString() : null,
+                recurrence_rule: newRecurrence || null,
+                parameters_json: JSON.stringify(newParams)
+            });
         }
+
+        async function triggerJob() {
+            await sendJobCommand('TRIGGER_JOB');
+        }
+
+        async function togglePauseJob() {
+            const isPaused = currentJob?.job_status === 'paused' || currentJob?.status === 'paused';
+            await sendJobCommand(isPaused ? 'RESUME_JOB' : 'PAUSE_JOB');
+        }
+
+        async function deleteJobFromModal() {
+            if (!confirm('Delete this job?')) return;
+            await sendJobCommand('DELETE_JOB');
+        }
+
+        // Close job modal on overlay click
+        document.getElementById('job-modal').addEventListener('click', (e) => {
+            if (e.target.classList.contains('modal-overlay')) {
+                closeJobModal();
+            }
+        });
+
+        // Event delegation for calendar event clicks
+        document.addEventListener('click', (e) => {
+            const eventEl = e.target.closest('.calendar-event');
+            if (eventEl) {
+                e.stopPropagation();
+                const jobIdx = parseInt(eventEl.dataset.jobIndex, 10);
+                if (!isNaN(jobIdx) && jobIdx >= 0) {
+                    openJobModal(jobIdx);
+                } else {
+                    console.warn('Invalid job index:', eventEl.dataset.jobIndex);
+                }
+            }
+        });
     </script>
 </body>
 </html>

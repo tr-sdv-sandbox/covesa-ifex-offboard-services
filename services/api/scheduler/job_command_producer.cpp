@@ -120,9 +120,9 @@ bool JobCommandProducer::send_create_job(
     const std::string& service_name,
     const std::string& method_name,
     const std::string& parameters_json,
-    const std::string& scheduled_time,
+    uint64_t scheduled_time_ms,
     const std::string& recurrence_rule,
-    const std::string& end_time,
+    uint64_t end_time_ms,
     const std::string& requester_id) {
 
     namespace cmd = swdv::scheduler_command_envelope;
@@ -140,9 +140,9 @@ bool JobCommandProducer::send_create_job(
     job->set_service(service_name);
     job->set_method(method_name);
     job->set_parameters_json(parameters_json);
-    job->set_scheduled_time(scheduled_time);
+    job->set_scheduled_time_ms(scheduled_time_ms);
     job->set_recurrence_rule(recurrence_rule);
-    job->set_end_time(end_time);
+    job->set_end_time_ms(end_time_ms);
 
     return send_command(vehicle_id, command.SerializeAsString());
 }
@@ -152,10 +152,10 @@ bool JobCommandProducer::send_update_job(
     const std::string& command_id,
     const std::string& job_id,
     const std::string& title,
-    const std::string& scheduled_time,
+    uint64_t scheduled_time_ms,
     const std::string& recurrence_rule,
     const std::string& parameters_json,
-    const std::string& end_time,
+    uint64_t end_time_ms,
     const std::string& requester_id) {
 
     namespace cmd = swdv::scheduler_command_envelope;
@@ -170,10 +170,10 @@ bool JobCommandProducer::send_update_job(
     auto* update = command.mutable_update_job();
     update->set_job_id(job_id);
     update->set_title(title);
-    update->set_scheduled_time(scheduled_time);
+    update->set_scheduled_time_ms(scheduled_time_ms);
     update->set_recurrence_rule(recurrence_rule);
     update->set_parameters_json(parameters_json);
-    update->set_end_time(end_time);
+    update->set_end_time_ms(end_time_ms);
 
     return send_command(vehicle_id, command.SerializeAsString());
 }

@@ -193,8 +193,7 @@ CREATE TABLE schema_registry (
 
     -- Metadata
     first_seen_at TIMESTAMPTZ DEFAULT NOW(),
-    first_vehicle_id VARCHAR(64),         -- Which vehicle first provided this schema
-    schema_count INTEGER DEFAULT 1        -- How many vehicles have this schema
+    first_vehicle_id VARCHAR(64)          -- Which vehicle first provided this schema
 );
 
 COMMENT ON TABLE schema_registry IS 'IFEX schemas indexed by SHA-256 hash (fleet-wide deduplication)';
@@ -241,9 +240,11 @@ SELECT
     sr.methods,
     sr.struct_definitions,
     sr.enum_definitions,
-    sr.schema_count AS vehicle_count,
+    COUNT(DISTINCT vs.vehicle_id) AS vehicle_count,
     sr.first_seen_at
 FROM schema_registry sr
+LEFT JOIN vehicle_schemas vs ON sr.schema_hash = vs.schema_hash
+GROUP BY sr.schema_hash, sr.service_name, sr.version, sr.methods, sr.struct_definitions, sr.enum_definitions, sr.first_seen_at
 ORDER BY sr.service_name, sr.version;
 
 -- =============================================================================

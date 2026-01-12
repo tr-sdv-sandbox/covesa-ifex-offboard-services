@@ -53,9 +53,9 @@ public:
         const std::string& service_name,
         const std::string& method_name,
         const std::string& parameters_json,
-        const std::string& scheduled_time,
+        uint64_t scheduled_time_ms,
         const std::string& recurrence_rule,
-        const std::string& end_time,
+        uint64_t end_time_ms,
         const std::string& requester_id);
 
     /// Send an update job command
@@ -64,10 +64,10 @@ public:
         const std::string& command_id,
         const std::string& job_id,
         const std::string& title,
-        const std::string& scheduled_time,
+        uint64_t scheduled_time_ms,
         const std::string& recurrence_rule,
         const std::string& parameters_json,
-        const std::string& end_time,
+        uint64_t end_time_ms,
         const std::string& requester_id);
 
     /// Send a delete job command

@@ -2,24 +2,33 @@
 ///
 /// Consumes scheduler sync messages (content_id=202) from Kafka
 /// and persists job state to PostgreSQL.
+///
+/// Also reconciles offboard_calendar with vehicle state, sending
+/// commands to align vehicle with cloud state.
 
 #include <atomic>
 #include <csignal>
 #include <memory>
 #include <string>
+#include <random>
+#include <sstream>
+#include <iomanip>
 
 #include <gflags/gflags.h>
 #include <glog/logging.h>
 
 #include "kafka_consumer.hpp"
+#include "kafka_producer.hpp"
 #include "postgres_client.hpp"
 #include "scheduler_offboard_codec.hpp"
 #include "scheduler_store.hpp"
+#include "scheduler-command-envelope.pb.h"
 
 // Command-line flags
 DEFINE_string(kafka_broker, "localhost:9092", "Kafka broker address");
 DEFINE_string(kafka_group, "scheduler-mirror", "Kafka consumer group");
 DEFINE_string(kafka_topic, "ifex.scheduler.202", "Kafka topic to consume");
+DEFINE_string(kafka_c2v_topic, "ifex.c2v.scheduler", "Kafka topic for c2v commands");
 
 DEFINE_string(postgres_host, "localhost", "PostgreSQL host");
 DEFINE_int32(postgres_port, 5432, "PostgreSQL port");
@@ -33,6 +42,72 @@ std::atomic<bool> g_shutdown{false};
 void signal_handler(int signum) {
     LOG(INFO) << "Received signal " << signum << ", shutting down...";
     g_shutdown = true;
+}
+
+// Generate unique command ID
+std::string generate_command_id() {
+    static std::random_device rd;
+    static std::mt19937_64 gen(rd());
+    static std::uniform_int_distribution<uint64_t> dist;
+
+    std::stringstream ss;
+    ss << "cmd-" << std::hex << std::setfill('0') << std::setw(16) << dist(gen);
+    return ss.str();
+}
+
+// Build scheduler command protobuf from ReconcileCommand
+swdv::scheduler_command_envelope::scheduler_command_t build_scheduler_command(
+    const ifex::offboard::ReconcileCommand& cmd) {
+
+    swdv::scheduler_command_envelope::scheduler_command_t proto;
+    proto.set_command_id(generate_command_id());
+    proto.set_timestamp_ms(std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count());
+    proto.set_requester_id("scheduler-mirror-reconcile");
+
+    switch (cmd.type) {
+        case ifex::offboard::ReconcileCommand::CREATE: {
+            proto.set_type(swdv::scheduler_command_envelope::COMMAND_CREATE_JOB);
+            auto* job_def = proto.mutable_create_job();
+            job_def->set_job_id(cmd.job_id);
+            job_def->set_title(cmd.title);
+            job_def->set_service(cmd.service);
+            job_def->set_method(cmd.method);
+            job_def->set_parameters_json(cmd.parameters_json);
+            job_def->set_scheduled_time_ms(cmd.scheduled_time_ms);
+            job_def->set_recurrence_rule(cmd.recurrence_rule);
+            job_def->set_end_time_ms(cmd.end_time_ms);
+            job_def->set_wake_policy(
+                static_cast<swdv::scheduler_command_envelope::wake_policy_t>(cmd.wake_policy));
+            job_def->set_sleep_policy(
+                static_cast<swdv::scheduler_command_envelope::sleep_policy_t>(cmd.sleep_policy));
+            job_def->set_wake_lead_time_s(cmd.wake_lead_time_s);
+            break;
+        }
+        case ifex::offboard::ReconcileCommand::UPDATE: {
+            proto.set_type(swdv::scheduler_command_envelope::COMMAND_UPDATE_JOB);
+            auto* job_upd = proto.mutable_update_job();
+            job_upd->set_job_id(cmd.job_id);
+            job_upd->set_title(cmd.title);
+            job_upd->set_scheduled_time_ms(cmd.scheduled_time_ms);
+            job_upd->set_recurrence_rule(cmd.recurrence_rule);
+            job_upd->set_parameters_json(cmd.parameters_json);
+            job_upd->set_end_time_ms(cmd.end_time_ms);
+            job_upd->set_wake_policy(
+                static_cast<swdv::scheduler_command_envelope::wake_policy_t>(cmd.wake_policy));
+            job_upd->set_sleep_policy(
+                static_cast<swdv::scheduler_command_envelope::sleep_policy_t>(cmd.sleep_policy));
+            job_upd->set_wake_lead_time_s(cmd.wake_lead_time_s);
+            break;
+        }
+        case ifex::offboard::ReconcileCommand::DELETE: {
+            proto.set_type(swdv::scheduler_command_envelope::COMMAND_DELETE_JOB);
+            proto.set_delete_job_id(cmd.job_id);
+            break;
+        }
+    }
+
+    return proto;
 }
 
 int main(int argc, char* argv[]) {
@@ -66,6 +141,15 @@ int main(int argc, char* argv[]) {
 
     // Create scheduler store
     ifex::offboard::SchedulerStore store(db);
+
+    // Create Kafka producer for c2v commands
+    ifex::offboard::KafkaProducerConfig producer_config;
+    producer_config.brokers = FLAGS_kafka_broker;
+    producer_config.client_id = "scheduler-mirror-producer";
+
+    auto producer = std::make_shared<ifex::offboard::KafkaProducer>(producer_config);
+
+    LOG(INFO) << "C2V Kafka producer initialized, topic=" << FLAGS_kafka_c2v_topic;
 
     // Create Kafka consumer
     ifex::offboard::KafkaConsumerConfig kafka_config;
@@ -117,6 +201,37 @@ int main(int argc, char* argv[]) {
 
             VLOG(1) << "Processed " << offboard_msg->sync_message().events_size()
                     << " events from " << vehicle_id;
+
+            // After processing vehicle sync, reconcile with offboard calendar
+            // This pushes any pending cloud-side jobs to the vehicle
+            if (store.has_pending_offboard_items(vehicle_id)) {
+                LOG(INFO) << "Vehicle " << vehicle_id << " has pending offboard items, reconciling...";
+
+                auto commands = store.reconcile_with_offboard(vehicle_id);
+
+                for (const auto& cmd : commands) {
+                    auto proto = build_scheduler_command(cmd);
+                    std::string serialized;
+                    if (!proto.SerializeToString(&serialized)) {
+                        LOG(ERROR) << "Failed to serialize reconcile command for " << cmd.job_id;
+                        continue;
+                    }
+
+                    // Send to c2v topic with vehicle_id as key
+                    if (producer->produce(FLAGS_kafka_c2v_topic, vehicle_id, serialized)) {
+                        LOG(INFO) << "Sent reconcile command " << cmd.job_id
+                                  << " type=" << static_cast<int>(cmd.type)
+                                  << " to vehicle " << vehicle_id;
+                    } else {
+                        LOG(ERROR) << "Failed to send reconcile command " << cmd.job_id;
+                    }
+                }
+
+                if (!commands.empty()) {
+                    LOG(INFO) << "Reconciliation complete: sent " << commands.size()
+                              << " commands to " << vehicle_id;
+                }
+            }
 
         } catch (const std::exception& e) {
             LOG(ERROR) << "Error processing sync from " << vehicle_id
