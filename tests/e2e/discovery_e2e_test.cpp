@@ -30,7 +30,8 @@
 #include "e2e_test_fixture.hpp"
 #include "cloud-discovery-service.grpc.pb.h"
 
-using namespace ifex::cloud::discovery;
+// IFEX-based types namespace
+namespace proto = swdv::cloud_discovery_service;
 using ifex::offboard::test::E2ETestInfrastructure;
 
 /// Get directory containing the current executable
@@ -59,7 +60,13 @@ static const char* REGION = "eu-west-1";
 
 class DiscoveryE2ETest : public ::testing::Test {
 protected:
-    static std::unique_ptr<CloudDiscoveryService::Stub> stub_;
+    // IFEX-based stubs (one per method)
+    static std::unique_ptr<proto::list_vehicles_service::Stub> list_vehicles_stub_;
+    static std::unique_ptr<proto::get_vehicle_services_service::Stub> get_vehicle_services_stub_;
+    static std::unique_ptr<proto::query_services_by_name_service::Stub> query_services_by_name_stub_;
+    static std::unique_ptr<proto::get_fleet_service_stats_service::Stub> get_fleet_service_stats_stub_;
+    static std::unique_ptr<proto::find_vehicles_with_service_service::Stub> find_vehicles_with_service_stub_;
+    static std::unique_ptr<proto::healthy_service::Stub> healthy_stub_;
     static std::shared_ptr<grpc::Channel> channel_;
     static pid_t discovery_api_pid_;
     static std::unique_ptr<ifex::offboard::PostgresClient> db_;
@@ -152,7 +159,14 @@ protected:
         // Connect gRPC client
         std::string target = std::string(DISCOVERY_API_HOST) + ":" + std::to_string(DISCOVERY_API_PORT);
         channel_ = grpc::CreateChannel(target, grpc::InsecureChannelCredentials());
-        stub_ = CloudDiscoveryService::NewStub(channel_);
+
+        // Create all IFEX stubs (one per method)
+        list_vehicles_stub_ = proto::list_vehicles_service::NewStub(channel_);
+        get_vehicle_services_stub_ = proto::get_vehicle_services_service::NewStub(channel_);
+        query_services_by_name_stub_ = proto::query_services_by_name_service::NewStub(channel_);
+        get_fleet_service_stats_stub_ = proto::get_fleet_service_stats_service::NewStub(channel_);
+        find_vehicles_with_service_stub_ = proto::find_vehicles_with_service_service::NewStub(channel_);
+        healthy_stub_ = proto::healthy_service::NewStub(channel_);
 
         // Wait for connection
         auto deadline = std::chrono::system_clock::now() + std::chrono::seconds(5);
@@ -188,7 +202,7 @@ protected:
     }
 
     void SetUp() override {
-        ASSERT_TRUE(stub_ != nullptr) << "gRPC stub not initialized";
+        ASSERT_TRUE(list_vehicles_stub_ != nullptr) << "gRPC stubs not initialized";
     }
 
     // Helper to create a test service in the database using new schema tables
@@ -226,7 +240,12 @@ protected:
 };
 
 // Static member initialization
-std::unique_ptr<CloudDiscoveryService::Stub> DiscoveryE2ETest::stub_;
+std::unique_ptr<proto::list_vehicles_service::Stub> DiscoveryE2ETest::list_vehicles_stub_;
+std::unique_ptr<proto::get_vehicle_services_service::Stub> DiscoveryE2ETest::get_vehicle_services_stub_;
+std::unique_ptr<proto::query_services_by_name_service::Stub> DiscoveryE2ETest::query_services_by_name_stub_;
+std::unique_ptr<proto::get_fleet_service_stats_service::Stub> DiscoveryE2ETest::get_fleet_service_stats_stub_;
+std::unique_ptr<proto::find_vehicles_with_service_service::Stub> DiscoveryE2ETest::find_vehicles_with_service_stub_;
+std::unique_ptr<proto::healthy_service::Stub> DiscoveryE2ETest::healthy_stub_;
 std::shared_ptr<grpc::Channel> DiscoveryE2ETest::channel_;
 pid_t DiscoveryE2ETest::discovery_api_pid_ = 0;
 std::unique_ptr<ifex::offboard::PostgresClient> DiscoveryE2ETest::db_;
@@ -249,23 +268,23 @@ TEST_F(DiscoveryE2ETest, CloudDiscoveryConnection) {
 
 TEST_F(DiscoveryE2ETest, ListVehiclesBasic) {
     grpc::ClientContext context;
-    ListVehiclesRequest request;
-    ListVehiclesResponse response;
+    proto::list_vehicles_request request;
+    proto::list_vehicles_response response;
 
-    request.set_page_size(100);
+    request.mutable_filter()->set_page_size(100);
 
-    auto status = stub_->ListVehicles(&context, request, &response);
+    auto status = list_vehicles_stub_->list_vehicles(&context, request, &response);
 
     ASSERT_TRUE(status.ok()) << "ListVehicles failed: " << status.error_message();
-    EXPECT_GE(response.total_count(), 2) << "Expected at least 2 test vehicles";
-    EXPECT_GE(response.vehicles_size(), 2);
+    EXPECT_GE(response.result().total_count(), 2) << "Expected at least 2 test vehicles";
+    EXPECT_GE(response.result().vehicles_size(), 2);
 
-    LOG(INFO) << "ListVehicles: total=" << response.total_count()
-              << " returned=" << response.vehicles_size();
+    LOG(INFO) << "ListVehicles: total=" << response.result().total_count()
+              << " returned=" << response.result().vehicles_size();
 
     // Verify our test vehicles are present
     bool found_v1 = false, found_v2 = false;
-    for (const auto& v : response.vehicles()) {
+    for (const auto& v : response.result().vehicles()) {
         if (v.vehicle_id() == VEHICLE_ID) {
             found_v1 = true;
             EXPECT_TRUE(v.is_online());
@@ -283,26 +302,27 @@ TEST_F(DiscoveryE2ETest, ListVehiclesBasic) {
 
 TEST_F(DiscoveryE2ETest, ListVehiclesOnlineOnly) {
     grpc::ClientContext context;
-    ListVehiclesRequest request;
-    ListVehiclesResponse response;
+    proto::list_vehicles_request request;
+    proto::list_vehicles_response response;
 
-    request.set_online_only(true);
-    request.set_page_size(100);
+    auto* filter = request.mutable_filter();
+    filter->set_online_only(true);
+    filter->set_page_size(100);
 
-    auto status = stub_->ListVehicles(&context, request, &response);
+    auto status = list_vehicles_stub_->list_vehicles(&context, request, &response);
 
     ASSERT_TRUE(status.ok()) << "ListVehicles (online_only) failed: " << status.error_message();
 
-    LOG(INFO) << "ListVehicles (online_only): total=" << response.total_count();
+    LOG(INFO) << "ListVehicles (online_only): total=" << response.result().total_count();
 
     // All returned vehicles should be online
-    for (const auto& v : response.vehicles()) {
+    for (const auto& v : response.result().vehicles()) {
         EXPECT_TRUE(v.is_online()) << "Vehicle " << v.vehicle_id() << " should be online";
     }
 
     // VEHICLE_ID should be in the list, VEHICLE_ID_2 should not
     bool found_v1 = false, found_v2 = false;
-    for (const auto& v : response.vehicles()) {
+    for (const auto& v : response.result().vehicles()) {
         if (v.vehicle_id() == VEHICLE_ID) found_v1 = true;
         if (v.vehicle_id() == VEHICLE_ID_2) found_v2 = true;
     }
@@ -312,20 +332,21 @@ TEST_F(DiscoveryE2ETest, ListVehiclesOnlineOnly) {
 
 TEST_F(DiscoveryE2ETest, ListVehiclesWithFleetFilter) {
     grpc::ClientContext context;
-    ListVehiclesRequest request;
-    ListVehiclesResponse response;
+    proto::list_vehicles_request request;
+    proto::list_vehicles_response response;
 
-    request.set_fleet_id_filter(FLEET_ID);
-    request.set_page_size(100);
+    auto* filter = request.mutable_filter();
+    filter->set_fleet_id_filter(FLEET_ID);
+    filter->set_page_size(100);
 
-    auto status = stub_->ListVehicles(&context, request, &response);
+    auto status = list_vehicles_stub_->list_vehicles(&context, request, &response);
 
     ASSERT_TRUE(status.ok()) << "ListVehicles (fleet filter) failed: " << status.error_message();
 
-    LOG(INFO) << "ListVehicles (fleet=" << FLEET_ID << "): total=" << response.total_count();
+    LOG(INFO) << "ListVehicles (fleet=" << FLEET_ID << "): total=" << response.result().total_count();
 
     // All returned vehicles should belong to our test fleet
-    for (const auto& v : response.vehicles()) {
+    for (const auto& v : response.result().vehicles()) {
         EXPECT_EQ(v.fleet_id(), FLEET_ID) << "Vehicle " << v.vehicle_id()
             << " has unexpected fleet_id: " << v.fleet_id();
     }
@@ -333,20 +354,21 @@ TEST_F(DiscoveryE2ETest, ListVehiclesWithFleetFilter) {
 
 TEST_F(DiscoveryE2ETest, ListVehiclesWithRegionFilter) {
     grpc::ClientContext context;
-    ListVehiclesRequest request;
-    ListVehiclesResponse response;
+    proto::list_vehicles_request request;
+    proto::list_vehicles_response response;
 
-    request.set_region_filter(REGION);
-    request.set_page_size(100);
+    auto* filter = request.mutable_filter();
+    filter->set_region_filter(REGION);
+    filter->set_page_size(100);
 
-    auto status = stub_->ListVehicles(&context, request, &response);
+    auto status = list_vehicles_stub_->list_vehicles(&context, request, &response);
 
     ASSERT_TRUE(status.ok()) << "ListVehicles (region filter) failed: " << status.error_message();
 
-    LOG(INFO) << "ListVehicles (region=" << REGION << "): total=" << response.total_count();
+    LOG(INFO) << "ListVehicles (region=" << REGION << "): total=" << response.result().total_count();
 
     // All returned vehicles should be in our test region
-    for (const auto& v : response.vehicles()) {
+    for (const auto& v : response.result().vehicles()) {
         EXPECT_EQ(v.region(), REGION) << "Vehicle " << v.vehicle_id()
             << " has unexpected region: " << v.region();
     }
@@ -354,36 +376,36 @@ TEST_F(DiscoveryE2ETest, ListVehiclesWithRegionFilter) {
 
 TEST_F(DiscoveryE2ETest, ListVehiclesPagination) {
     grpc::ClientContext context1;
-    ListVehiclesRequest request;
-    ListVehiclesResponse response1;
+    proto::list_vehicles_request request;
+    proto::list_vehicles_response response1;
 
-    request.set_page_size(1);
+    request.mutable_filter()->set_page_size(1);
 
-    auto status = stub_->ListVehicles(&context1, request, &response1);
+    auto status = list_vehicles_stub_->list_vehicles(&context1, request, &response1);
 
     ASSERT_TRUE(status.ok()) << "ListVehicles (page 1) failed: " << status.error_message();
-    EXPECT_EQ(response1.vehicles_size(), 1);
-    EXPECT_GE(response1.total_count(), 2);
+    EXPECT_EQ(response1.result().vehicles_size(), 1);
+    EXPECT_GE(response1.result().total_count(), 2);
 
-    if (response1.total_count() > 1) {
-        EXPECT_FALSE(response1.next_page_token().empty()) << "Expected pagination token";
+    if (response1.result().total_count() > 1) {
+        EXPECT_FALSE(response1.result().next_page_token().empty()) << "Expected pagination token";
 
         // Get second page
         grpc::ClientContext context2;
-        request.set_page_token(response1.next_page_token());
-        ListVehiclesResponse response2;
+        request.mutable_filter()->set_page_token(response1.result().next_page_token());
+        proto::list_vehicles_response response2;
 
-        status = stub_->ListVehicles(&context2, request, &response2);
+        status = list_vehicles_stub_->list_vehicles(&context2, request, &response2);
 
         ASSERT_TRUE(status.ok()) << "ListVehicles (page 2) failed: " << status.error_message();
-        EXPECT_EQ(response2.vehicles_size(), 1);
+        EXPECT_EQ(response2.result().vehicles_size(), 1);
 
         // Verify different vehicles
-        EXPECT_NE(response1.vehicles(0).vehicle_id(), response2.vehicles(0).vehicle_id())
+        EXPECT_NE(response1.result().vehicles(0).vehicle_id(), response2.result().vehicles(0).vehicle_id())
             << "Pagination returned same vehicle twice";
 
-        LOG(INFO) << "Pagination: page1=" << response1.vehicles(0).vehicle_id()
-                  << " page2=" << response2.vehicles(0).vehicle_id();
+        LOG(INFO) << "Pagination: page1=" << response1.result().vehicles(0).vehicle_id()
+                  << " page2=" << response2.result().vehicles(0).vehicle_id();
     }
 }
 
@@ -393,18 +415,18 @@ TEST_F(DiscoveryE2ETest, ListVehiclesPagination) {
 
 TEST_F(DiscoveryE2ETest, GetVehicleServicesEmpty) {
     grpc::ClientContext context;
-    GetVehicleServicesRequest request;
-    GetVehicleServicesResponse response;
+    proto::get_vehicle_services_request request;
+    proto::get_vehicle_services_response response;
 
     request.set_vehicle_id(VEHICLE_ID);
 
-    auto status = stub_->GetVehicleServices(&context, request, &response);
+    auto status = get_vehicle_services_stub_->get_vehicle_services(&context, request, &response);
 
     ASSERT_TRUE(status.ok()) << "GetVehicleServices failed: " << status.error_message();
-    EXPECT_EQ(response.services_size(), 0) << "Expected no services for clean test vehicle";
+    EXPECT_EQ(response.result().services_size(), 0) << "Expected no services for clean test vehicle";
 
     LOG(INFO) << "GetVehicleServices (empty): vehicle=" << VEHICLE_ID
-              << " services=" << response.services_size();
+              << " services=" << response.result().services_size();
 }
 
 TEST_F(DiscoveryE2ETest, GetVehicleServicesWithData) {
@@ -413,20 +435,20 @@ TEST_F(DiscoveryE2ETest, GetVehicleServicesWithData) {
     CreateTestService(VEHICLE_ID, "navigation_service", "2.0.0", "available");
 
     grpc::ClientContext context;
-    GetVehicleServicesRequest request;
-    GetVehicleServicesResponse response;
+    proto::get_vehicle_services_request request;
+    proto::get_vehicle_services_response response;
 
     request.set_vehicle_id(VEHICLE_ID);
 
-    auto status = stub_->GetVehicleServices(&context, request, &response);
+    auto status = get_vehicle_services_stub_->get_vehicle_services(&context, request, &response);
 
     ASSERT_TRUE(status.ok()) << "GetVehicleServices failed: " << status.error_message();
-    EXPECT_EQ(response.services_size(), 2) << "Expected 2 services";
+    EXPECT_EQ(response.result().services_size(), 2) << "Expected 2 services";
 
     LOG(INFO) << "GetVehicleServices: vehicle=" << VEHICLE_ID
-              << " services=" << response.services_size();
+              << " services=" << response.result().services_size();
 
-    for (const auto& svc : response.services()) {
+    for (const auto& svc : response.result().services()) {
         LOG(INFO) << "  - " << svc.service_name() << " v" << svc.version();
     }
 
@@ -435,12 +457,12 @@ TEST_F(DiscoveryE2ETest, GetVehicleServicesWithData) {
 
 TEST_F(DiscoveryE2ETest, GetVehicleServicesMissingVehicleId) {
     grpc::ClientContext context;
-    GetVehicleServicesRequest request;
-    GetVehicleServicesResponse response;
+    proto::get_vehicle_services_request request;
+    proto::get_vehicle_services_response response;
 
     // Don't set vehicle_id
 
-    auto status = stub_->GetVehicleServices(&context, request, &response);
+    auto status = get_vehicle_services_stub_->get_vehicle_services(&context, request, &response);
 
     EXPECT_FALSE(status.ok());
     EXPECT_EQ(status.error_code(), grpc::INVALID_ARGUMENT);
@@ -456,20 +478,21 @@ TEST_F(DiscoveryE2ETest, QueryServicesByNameExact) {
     CreateTestService(VEHICLE_ID_2, "hvac_service", "1.1.0");
 
     grpc::ClientContext context;
-    QueryServicesByNameRequest request;
-    QueryServicesByNameResponse response;
+    proto::query_services_by_name_request request;
+    proto::query_services_by_name_response response;
 
-    request.set_service_name_pattern("hvac_service");
-    request.set_page_size(100);
+    auto* filter = request.mutable_filter();
+    filter->set_service_name_pattern("hvac_service");
+    filter->set_page_size(100);
 
-    auto status = stub_->QueryServicesByName(&context, request, &response);
+    auto status = query_services_by_name_stub_->query_services_by_name(&context, request, &response);
 
     ASSERT_TRUE(status.ok()) << "QueryServicesByName failed: " << status.error_message();
-    EXPECT_GE(response.total_count(), 2) << "Expected at least 2 hvac_service instances";
+    EXPECT_GE(response.result().total_count(), 2) << "Expected at least 2 hvac_service instances";
 
-    LOG(INFO) << "QueryServicesByName (hvac_service): total=" << response.total_count();
+    LOG(INFO) << "QueryServicesByName (hvac_service): total=" << response.result().total_count();
 
-    for (const auto& loc : response.locations()) {
+    for (const auto& loc : response.result().locations()) {
         EXPECT_EQ(loc.service().service_name(), "hvac_service");
         LOG(INFO) << "  - vehicle=" << loc.vehicle_id() << " version=" << loc.service().version();
     }
@@ -484,21 +507,22 @@ TEST_F(DiscoveryE2ETest, QueryServicesByNamePattern) {
     CreateTestService(VEHICLE_ID, "navigation_service", "1.0.0");
 
     grpc::ClientContext context;
-    QueryServicesByNameRequest request;
-    QueryServicesByNameResponse response;
+    proto::query_services_by_name_request request;
+    proto::query_services_by_name_response response;
 
-    request.set_service_name_pattern("climate%");
-    request.set_page_size(100);
+    auto* filter = request.mutable_filter();
+    filter->set_service_name_pattern("climate%");
+    filter->set_page_size(100);
 
-    auto status = stub_->QueryServicesByName(&context, request, &response);
+    auto status = query_services_by_name_stub_->query_services_by_name(&context, request, &response);
 
     ASSERT_TRUE(status.ok()) << "QueryServicesByName (pattern) failed: " << status.error_message();
-    EXPECT_GE(response.total_count(), 2) << "Expected at least 2 climate* services";
+    EXPECT_GE(response.result().total_count(), 2) << "Expected at least 2 climate* services";
 
-    LOG(INFO) << "QueryServicesByName (climate%): total=" << response.total_count();
+    LOG(INFO) << "QueryServicesByName (climate%): total=" << response.result().total_count();
 
     // All returned services should match the pattern
-    for (const auto& loc : response.locations()) {
+    for (const auto& loc : response.result().locations()) {
         EXPECT_TRUE(loc.service().service_name().find("climate") == 0)
             << "Service " << loc.service().service_name() << " doesn't match pattern";
     }
@@ -508,12 +532,12 @@ TEST_F(DiscoveryE2ETest, QueryServicesByNamePattern) {
 
 TEST_F(DiscoveryE2ETest, QueryServicesByNameMissingPattern) {
     grpc::ClientContext context;
-    QueryServicesByNameRequest request;
-    QueryServicesByNameResponse response;
+    proto::query_services_by_name_request request;
+    proto::query_services_by_name_response response;
 
     // Don't set service_name_pattern
 
-    auto status = stub_->QueryServicesByName(&context, request, &response);
+    auto status = query_services_by_name_stub_->query_services_by_name(&context, request, &response);
 
     EXPECT_FALSE(status.ok());
     EXPECT_EQ(status.error_code(), grpc::INVALID_ARGUMENT);
@@ -525,19 +549,19 @@ TEST_F(DiscoveryE2ETest, QueryServicesByNameMissingPattern) {
 
 TEST_F(DiscoveryE2ETest, GetFleetServiceStatsEmpty) {
     grpc::ClientContext context;
-    GetFleetServiceStatsRequest request;
-    GetFleetServiceStatsResponse response;
+    proto::get_fleet_service_stats_request request;
+    proto::get_fleet_service_stats_response response;
 
     // Use a non-existent fleet
-    request.set_fleet_id_filter("nonexistent-fleet-xyz");
+    request.mutable_filter()->set_fleet_id_filter("nonexistent-fleet-xyz");
 
-    auto status = stub_->GetFleetServiceStats(&context, request, &response);
+    auto status = get_fleet_service_stats_stub_->get_fleet_service_stats(&context, request, &response);
 
     ASSERT_TRUE(status.ok()) << "GetFleetServiceStats failed: " << status.error_message();
-    EXPECT_EQ(response.total_vehicles(), 0);
-    EXPECT_EQ(response.total_services(), 0);
+    EXPECT_EQ(response.result().total_vehicles(), 0);
+    EXPECT_EQ(response.result().total_services(), 0);
 
-    LOG(INFO) << "GetFleetServiceStats (empty): total_vehicles=" << response.total_vehicles();
+    LOG(INFO) << "GetFleetServiceStats (empty): total_vehicles=" << response.result().total_vehicles();
 }
 
 TEST_F(DiscoveryE2ETest, GetFleetServiceStatsWithData) {
@@ -547,22 +571,22 @@ TEST_F(DiscoveryE2ETest, GetFleetServiceStatsWithData) {
     CreateTestService(VEHICLE_ID_2, "fleet_service_a", "1.1.0");
 
     grpc::ClientContext context;
-    GetFleetServiceStatsRequest request;
-    GetFleetServiceStatsResponse response;
+    proto::get_fleet_service_stats_request request;
+    proto::get_fleet_service_stats_response response;
 
-    request.set_fleet_id_filter(FLEET_ID);
+    request.mutable_filter()->set_fleet_id_filter(FLEET_ID);
 
-    auto status = stub_->GetFleetServiceStats(&context, request, &response);
+    auto status = get_fleet_service_stats_stub_->get_fleet_service_stats(&context, request, &response);
 
     ASSERT_TRUE(status.ok()) << "GetFleetServiceStats failed: " << status.error_message();
-    EXPECT_GE(response.total_vehicles(), 2);
-    EXPECT_GE(response.total_services(), 3);
+    EXPECT_GE(response.result().total_vehicles(), 2);
+    EXPECT_GE(response.result().total_services(), 3);
 
-    LOG(INFO) << "GetFleetServiceStats: total_vehicles=" << response.total_vehicles()
-              << " online_vehicles=" << response.online_vehicles()
-              << " total_services=" << response.total_services();
+    LOG(INFO) << "GetFleetServiceStats: total_vehicles=" << response.result().total_vehicles()
+              << " online_vehicles=" << response.result().online_vehicles()
+              << " total_services=" << response.result().total_services();
 
-    for (const auto& stat : response.stats()) {
+    for (const auto& stat : response.result().stats()) {
         LOG(INFO) << "  - " << stat.service_name()
                   << ": vehicles=" << stat.vehicle_count()
                   << " available=" << stat.available_count();
@@ -581,20 +605,21 @@ TEST_F(DiscoveryE2ETest, FindVehiclesWithServiceBasic) {
     CreateTestService(VEHICLE_ID_2, "find_test_service", "1.0.0");
 
     grpc::ClientContext context;
-    FindVehiclesWithServiceRequest request;
-    FindVehiclesWithServiceResponse response;
+    proto::find_vehicles_with_service_request request;
+    proto::find_vehicles_with_service_response response;
 
-    request.set_service_name("find_test_service");
-    request.set_page_size(100);
+    auto* filter = request.mutable_filter();
+    filter->set_service_name("find_test_service");
+    filter->set_page_size(100);
 
-    auto status = stub_->FindVehiclesWithService(&context, request, &response);
+    auto status = find_vehicles_with_service_stub_->find_vehicles_with_service(&context, request, &response);
 
     ASSERT_TRUE(status.ok()) << "FindVehiclesWithService failed: " << status.error_message();
-    EXPECT_GE(response.total_count(), 2) << "Expected at least 2 vehicles with service";
+    EXPECT_GE(response.result().total_count(), 2) << "Expected at least 2 vehicles with service";
 
-    LOG(INFO) << "FindVehiclesWithService (find_test_service): total=" << response.total_count();
+    LOG(INFO) << "FindVehiclesWithService (find_test_service): total=" << response.result().total_count();
 
-    for (const auto& v : response.vehicles()) {
+    for (const auto& v : response.result().vehicles()) {
         LOG(INFO) << "  - " << v.vehicle_id() << " (online=" << v.is_online() << ")";
     }
 
@@ -609,23 +634,24 @@ TEST_F(DiscoveryE2ETest, FindVehiclesWithServiceAvailableOnly) {
     CreateTestService(VEHICLE_ID_2, "status_test_service", "1.0.0", "unavailable");
 
     grpc::ClientContext context;
-    FindVehiclesWithServiceRequest request;
-    FindVehiclesWithServiceResponse response;
+    proto::find_vehicles_with_service_request request;
+    proto::find_vehicles_with_service_response response;
 
-    request.set_service_name("status_test_service");
-    request.set_available_only(true);
-    request.set_page_size(100);
+    auto* filter = request.mutable_filter();
+    filter->set_service_name("status_test_service");
+    filter->set_available_only(true);
+    filter->set_page_size(100);
 
-    auto status = stub_->FindVehiclesWithService(&context, request, &response);
+    auto status = find_vehicles_with_service_stub_->find_vehicles_with_service(&context, request, &response);
 
     ASSERT_TRUE(status.ok()) << "FindVehiclesWithService (available_only) failed: " << status.error_message();
 
-    LOG(INFO) << "FindVehiclesWithService (available_only): total=" << response.total_count();
+    LOG(INFO) << "FindVehiclesWithService (available_only): total=" << response.result().total_count();
 
     // With new schema, all registered services are considered "available"
     // Both vehicles should be found
     bool found_v1 = false, found_v2 = false;
-    for (const auto& v : response.vehicles()) {
+    for (const auto& v : response.result().vehicles()) {
         if (v.vehicle_id() == VEHICLE_ID) found_v1 = true;
         if (v.vehicle_id() == VEHICLE_ID_2) found_v2 = true;
     }
@@ -637,12 +663,12 @@ TEST_F(DiscoveryE2ETest, FindVehiclesWithServiceAvailableOnly) {
 
 TEST_F(DiscoveryE2ETest, FindVehiclesWithServiceMissingServiceName) {
     grpc::ClientContext context;
-    FindVehiclesWithServiceRequest request;
-    FindVehiclesWithServiceResponse response;
+    proto::find_vehicles_with_service_request request;
+    proto::find_vehicles_with_service_response response;
 
     // Don't set service_name
 
-    auto status = stub_->FindVehiclesWithService(&context, request, &response);
+    auto status = find_vehicles_with_service_stub_->find_vehicles_with_service(&context, request, &response);
 
     EXPECT_FALSE(status.ok());
     EXPECT_EQ(status.error_code(), grpc::INVALID_ARGUMENT);
@@ -650,26 +676,25 @@ TEST_F(DiscoveryE2ETest, FindVehiclesWithServiceMissingServiceName) {
 
 TEST_F(DiscoveryE2ETest, FindVehiclesWithServiceNotFound) {
     grpc::ClientContext context;
-    FindVehiclesWithServiceRequest request;
-    FindVehiclesWithServiceResponse response;
+    proto::find_vehicles_with_service_request request;
+    proto::find_vehicles_with_service_response response;
 
-    request.set_service_name("nonexistent_service_xyz_12345");
-    request.set_page_size(100);
+    auto* filter = request.mutable_filter();
+    filter->set_service_name("nonexistent_service_xyz_12345");
+    filter->set_page_size(100);
 
-    auto status = stub_->FindVehiclesWithService(&context, request, &response);
+    auto status = find_vehicles_with_service_stub_->find_vehicles_with_service(&context, request, &response);
 
     ASSERT_TRUE(status.ok()) << "FindVehiclesWithService failed: " << status.error_message();
-    EXPECT_EQ(response.total_count(), 0);
-    EXPECT_EQ(response.vehicles_size(), 0);
+    EXPECT_EQ(response.result().total_count(), 0);
+    EXPECT_EQ(response.result().vehicles_size(), 0);
 
-    LOG(INFO) << "FindVehiclesWithService (not found): total=" << response.total_count();
+    LOG(INFO) << "FindVehiclesWithService (not found): total=" << response.result().total_count();
 }
 
 // =============================================================================
 // Real Vehicle Tests (requires ifex-vehicle:latest Docker image)
 // =============================================================================
-
-#include "e2e_test_fixture.hpp"
 
 /**
  * @brief E2E tests with real vehicle container for discovery sync
@@ -686,7 +711,11 @@ TEST_F(DiscoveryE2ETest, FindVehiclesWithServiceNotFound) {
 class DiscoveryRealVehicleTest : public ifex::offboard::test::E2ETestFixture {
 protected:
     static constexpr const char* DISCOVERY_ADDR = "localhost:50081";
-    static std::unique_ptr<CloudDiscoveryService::Stub> stub_;
+    // IFEX-based stubs
+    static std::unique_ptr<proto::list_vehicles_service::Stub> list_vehicles_stub_;
+    static std::unique_ptr<proto::get_vehicle_services_service::Stub> get_vehicle_services_stub_;
+    static std::unique_ptr<proto::query_services_by_name_service::Stub> query_services_by_name_stub_;
+    static std::unique_ptr<proto::find_vehicles_with_service_service::Stub> find_vehicles_with_service_stub_;
     static std::shared_ptr<grpc::Channel> channel_;
     static pid_t discovery_api_pid_;
 
@@ -725,7 +754,10 @@ protected:
         // Connect gRPC client
         std::this_thread::sleep_for(std::chrono::seconds(2));
         channel_ = grpc::CreateChannel(DISCOVERY_ADDR, grpc::InsecureChannelCredentials());
-        stub_ = CloudDiscoveryService::NewStub(channel_);
+        list_vehicles_stub_ = proto::list_vehicles_service::NewStub(channel_);
+        get_vehicle_services_stub_ = proto::get_vehicle_services_service::NewStub(channel_);
+        query_services_by_name_stub_ = proto::query_services_by_name_service::NewStub(channel_);
+        find_vehicles_with_service_stub_ = proto::find_vehicles_with_service_service::NewStub(channel_);
 
         auto deadline = std::chrono::system_clock::now() + std::chrono::seconds(10);
         ASSERT_TRUE(channel_->WaitForConnected(deadline))
@@ -736,7 +768,10 @@ protected:
 
     static void TearDownTestSuite() {
         // Close gRPC first
-        stub_.reset();
+        list_vehicles_stub_.reset();
+        get_vehicle_services_stub_.reset();
+        query_services_by_name_stub_.reset();
+        find_vehicles_with_service_stub_.reset();
         channel_.reset();
 
         // Stop discovery_api
@@ -754,7 +789,10 @@ protected:
 };
 
 // Static members
-std::unique_ptr<CloudDiscoveryService::Stub> DiscoveryRealVehicleTest::stub_;
+std::unique_ptr<proto::list_vehicles_service::Stub> DiscoveryRealVehicleTest::list_vehicles_stub_;
+std::unique_ptr<proto::get_vehicle_services_service::Stub> DiscoveryRealVehicleTest::get_vehicle_services_stub_;
+std::unique_ptr<proto::query_services_by_name_service::Stub> DiscoveryRealVehicleTest::query_services_by_name_stub_;
+std::unique_ptr<proto::find_vehicles_with_service_service::Stub> DiscoveryRealVehicleTest::find_vehicles_with_service_stub_;
 std::shared_ptr<grpc::Channel> DiscoveryRealVehicleTest::channel_;
 pid_t DiscoveryRealVehicleTest::discovery_api_pid_ = 0;
 
@@ -769,17 +807,17 @@ TEST_F(DiscoveryRealVehicleTest, RealVehicle_EchoServiceDiscovered) {
 
     // Query via Discovery API
     grpc::ClientContext context;
-    GetVehicleServicesRequest request;
+    proto::get_vehicle_services_request request;
     request.set_vehicle_id(vehicle_id);
 
-    GetVehicleServicesResponse response;
-    auto status = stub_->GetVehicleServices(&context, request, &response);
+    proto::get_vehicle_services_response response;
+    auto status = get_vehicle_services_stub_->get_vehicle_services(&context, request, &response);
 
     ASSERT_TRUE(status.ok()) << "GetVehicleServices failed: " << status.error_message();
-    ASSERT_GE(response.services_size(), 1) << "Expected at least 1 service from real vehicle";
+    ASSERT_GE(response.result().services_size(), 1) << "Expected at least 1 service from real vehicle";
 
     bool found_echo = false;
-    for (const auto& svc : response.services()) {
+    for (const auto& svc : response.result().services()) {
         LOG(INFO) << "Found service on real vehicle: " << svc.service_name()
                   << " v" << (svc.version().empty() ? "(none)" : svc.version());
         if (svc.service_name() == "echo_service") {
@@ -800,17 +838,18 @@ TEST_F(DiscoveryRealVehicleTest, RealVehicle_VehicleIsOnline) {
     const char* vehicle_id = ifex::offboard::test::E2ETestInfrastructure::VEHICLE_ID;
 
     grpc::ClientContext context;
-    ListVehiclesRequest request;
-    request.set_online_only(true);
-    request.set_page_size(100);
+    proto::list_vehicles_request request;
+    auto* filter = request.mutable_filter();
+    filter->set_online_only(true);
+    filter->set_page_size(100);
 
-    ListVehiclesResponse response;
-    auto status = stub_->ListVehicles(&context, request, &response);
+    proto::list_vehicles_response response;
+    auto status = list_vehicles_stub_->list_vehicles(&context, request, &response);
 
     ASSERT_TRUE(status.ok()) << "ListVehicles failed: " << status.error_message();
 
     bool found_vehicle = false;
-    for (const auto& v : response.vehicles()) {
+    for (const auto& v : response.result().vehicles()) {
         if (v.vehicle_id() == vehicle_id) {
             found_vehicle = true;
             EXPECT_TRUE(v.is_online()) << "Real vehicle should be online";
@@ -827,20 +866,21 @@ TEST_F(DiscoveryRealVehicleTest, RealVehicle_QueryByServiceName) {
     // Query fleet-wide for echo_service - should find our real vehicle
 
     grpc::ClientContext context;
-    QueryServicesByNameRequest request;
-    request.set_service_name_pattern("echo_service");
-    request.set_page_size(100);
+    proto::query_services_by_name_request request;
+    auto* filter = request.mutable_filter();
+    filter->set_service_name_pattern("echo_service");
+    filter->set_page_size(100);
 
-    QueryServicesByNameResponse response;
-    auto status = stub_->QueryServicesByName(&context, request, &response);
+    proto::query_services_by_name_response response;
+    auto status = query_services_by_name_stub_->query_services_by_name(&context, request, &response);
 
     ASSERT_TRUE(status.ok()) << "QueryServicesByName failed: " << status.error_message();
-    EXPECT_GE(response.total_count(), 1) << "Expected at least 1 vehicle with echo_service";
+    EXPECT_GE(response.result().total_count(), 1) << "Expected at least 1 vehicle with echo_service";
 
     const char* vehicle_id = ifex::offboard::test::E2ETestInfrastructure::VEHICLE_ID;
 
     bool found_our_vehicle = false;
-    for (const auto& loc : response.locations()) {
+    for (const auto& loc : response.result().locations()) {
         LOG(INFO) << "Found echo_service on: " << loc.vehicle_id()
                   << " v" << loc.service().version();
         if (loc.vehicle_id() == vehicle_id) {
@@ -855,20 +895,21 @@ TEST_F(DiscoveryRealVehicleTest, RealVehicle_FindVehiclesWithService) {
     // Find all vehicles with echo_service
 
     grpc::ClientContext context;
-    FindVehiclesWithServiceRequest request;
-    request.set_service_name("echo_service");
-    request.set_page_size(100);
+    proto::find_vehicles_with_service_request request;
+    auto* filter = request.mutable_filter();
+    filter->set_service_name("echo_service");
+    filter->set_page_size(100);
 
-    FindVehiclesWithServiceResponse response;
-    auto status = stub_->FindVehiclesWithService(&context, request, &response);
+    proto::find_vehicles_with_service_response response;
+    auto status = find_vehicles_with_service_stub_->find_vehicles_with_service(&context, request, &response);
 
     ASSERT_TRUE(status.ok()) << "FindVehiclesWithService failed: " << status.error_message();
-    EXPECT_GE(response.total_count(), 1) << "Expected at least 1 vehicle with echo_service";
+    EXPECT_GE(response.result().total_count(), 1) << "Expected at least 1 vehicle with echo_service";
 
     const char* vehicle_id = ifex::offboard::test::E2ETestInfrastructure::VEHICLE_ID;
 
     bool found_our_vehicle = false;
-    for (const auto& v : response.vehicles()) {
+    for (const auto& v : response.result().vehicles()) {
         LOG(INFO) << "Vehicle with echo_service: " << v.vehicle_id()
                   << " online=" << v.is_online();
         if (v.vehicle_id() == vehicle_id) {

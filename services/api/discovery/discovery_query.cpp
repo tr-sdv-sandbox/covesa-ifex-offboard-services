@@ -47,6 +47,7 @@ std::string DiscoveryQuery::make_page_token(int offset) {
 }
 
 QueryResult<query::VehicleSummaryData> DiscoveryQuery::list_vehicles(
+    const std::string& vehicle_id_pattern,
     const std::string& fleet_id_filter,
     const std::string& region_filter,
     bool online_only,
@@ -61,6 +62,10 @@ QueryResult<query::VehicleSummaryData> DiscoveryQuery::list_vehicles(
     std::vector<std::string> params;
     int param_idx = 1;
 
+    if (!vehicle_id_pattern.empty()) {
+        conditions.push_back("e.vehicle_id ILIKE $" + std::to_string(param_idx++));
+        params.push_back(to_sql_pattern(vehicle_id_pattern));
+    }
     if (!fleet_id_filter.empty()) {
         conditions.push_back("e.fleet_id = $" + std::to_string(param_idx++));
         params.push_back(fleet_id_filter);
@@ -111,10 +116,13 @@ QueryResult<query::VehicleSummaryData> DiscoveryQuery::list_vehicles(
             e.region,
             e.model,
             e.year,
+            e.owner,
             COALESCE(s.service_count, 0) as service_count,
             COALESCE(j.job_count, 0) as job_count,
             v.last_seen_at,
-            v.is_online
+            v.is_online,
+            (EXTRACT(EPOCH FROM e.created_at) * 1000)::bigint AS created_at_ms,
+            (EXTRACT(EPOCH FROM e.updated_at) * 1000)::bigint AS updated_at_ms
         FROM vehicle_enrichment e
         LEFT JOIN vehicles v ON e.vehicle_id = v.vehicle_id
         LEFT JOIN (
@@ -149,9 +157,12 @@ QueryResult<query::VehicleSummaryData> DiscoveryQuery::list_vehicles(
         vs.region = row.get_string("region");
         vs.model = row.get_string("model");
         vs.year = row.is_null("year") ? 0 : row.get_int("year");
+        vs.owner = row.is_null("owner") ? "" : row.get_string("owner");
         vs.service_count = row.is_null("service_count") ? 0 : row.get_int("service_count");
         vs.job_count = row.is_null("job_count") ? 0 : row.get_int("job_count");
         vs.is_online = row.get_string("is_online") == "t";
+        vs.created_at_ms = row.is_null("created_at_ms") ? 0 : row.get_int64("created_at_ms");
+        vs.updated_at_ms = row.is_null("updated_at_ms") ? 0 : row.get_int64("updated_at_ms");
         result.items.push_back(std::move(vs));
     }
 
@@ -488,7 +499,10 @@ QueryResult<query::VehicleSummaryData> DiscoveryQuery::find_vehicles_with_servic
             e.region,
             e.model,
             e.year,
-            v.is_online
+            e.owner,
+            v.is_online,
+            (EXTRACT(EPOCH FROM e.created_at) * 1000)::bigint AS created_at_ms,
+            (EXTRACT(EPOCH FROM e.updated_at) * 1000)::bigint AS updated_at_ms
         FROM vehicle_enrichment e
         JOIN vehicle_schemas vs ON e.vehicle_id = vs.vehicle_id
         JOIN schema_registry sr ON vs.schema_hash = sr.schema_hash
@@ -515,7 +529,10 @@ QueryResult<query::VehicleSummaryData> DiscoveryQuery::find_vehicles_with_servic
         vs.region = row.get_string("region");
         vs.model = row.get_string("model");
         vs.year = row.is_null("year") ? 0 : row.get_int("year");
+        vs.owner = row.is_null("owner") ? "" : row.get_string("owner");
         vs.is_online = row.get_string("is_online") == "t";
+        vs.created_at_ms = row.is_null("created_at_ms") ? 0 : row.get_int64("created_at_ms");
+        vs.updated_at_ms = row.is_null("updated_at_ms") ? 0 : row.get_int64("updated_at_ms");
         result.items.push_back(std::move(vs));
     }
 

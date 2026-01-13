@@ -608,6 +608,49 @@ bool E2ETestInfrastructure::WaitForJobExecution(const std::string& job_id,
     return false;
 }
 
+bool E2ETestInfrastructure::WaitForJobSyncState(const std::string& job_id,
+                                                  const std::string& expected_state,
+                                                  std::chrono::seconds timeout) {
+    LOG(INFO) << "Waiting for job " << job_id << " sync_state=" << expected_state << "...";
+
+    auto deadline = std::chrono::steady_clock::now() + timeout;
+
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (!db_ || !db_->is_connected()) {
+            LOG(ERROR) << "Database connection lost";
+            return false;
+        }
+
+        auto result = db_->execute(
+            "SELECT sync_state FROM jobs WHERE job_id = $1",
+            {job_id});
+
+        if (result.ok() && result.num_rows() > 0) {
+            std::string current_state = result.row(0).get_string(0);
+            VLOG(1) << "  Job " << job_id << " sync_state=" << current_state;
+
+            if (current_state == expected_state) {
+                LOG(INFO) << "  Job " << job_id << " reached sync_state=" << expected_state;
+                return true;
+            }
+        }
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    }
+
+    // Log final state on timeout
+    auto result = db_->execute(
+        "SELECT sync_state FROM jobs WHERE job_id = $1",
+        {job_id});
+    std::string final_state = result.ok() && result.num_rows() > 0
+        ? result.row(0).get_string(0) : "(not found)";
+
+    LOG(ERROR) << "Timeout waiting for job " << job_id
+               << " sync_state=" << expected_state
+               << " (current: " << final_state << ")";
+    return false;
+}
+
 void E2ETestInfrastructure::ResetDatabase(PostgresClient* external_db) {
     PostgresClient* db = external_db ? external_db : db_.get();
     if (!db || !db->is_connected()) {

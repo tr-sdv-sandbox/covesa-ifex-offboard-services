@@ -1,7 +1,13 @@
 #include <gflags/gflags.h>
 #include <glog/logging.h>
+#include <grpcpp/grpcpp.h>
+#include <grpcpp/ext/proto_server_reflection_plugin.h>
+#include <grpcpp/health_check_service_interface.h>
 
-#include "grpc_service_base.hpp"
+#include <atomic>
+#include <csignal>
+#include <thread>
+
 #include "postgres_client.hpp"
 #include "discovery_service_impl.hpp"
 
@@ -16,12 +22,23 @@ DEFINE_string(postgres_db, "ifex_offboard", "PostgreSQL database");
 DEFINE_string(postgres_user, "ifex", "PostgreSQL user");
 DEFINE_string(postgres_password, "ifex_dev", "PostgreSQL password");
 
+static std::atomic<bool> g_shutdown{false};
+
+void signal_handler(int sig) {
+    LOG(INFO) << "Received signal " << sig << ", shutting down...";
+    g_shutdown = true;
+}
+
 int main(int argc, char* argv[]) {
     google::InitGoogleLogging(argv[0]);
     google::SetStderrLogging(google::INFO);
     gflags::ParseCommandLineFlags(&argc, &argv, true);
 
-    LOG(INFO) << "Cloud Discovery Service starting...";
+    // Install signal handlers
+    signal(SIGINT, signal_handler);
+    signal(SIGTERM, signal_handler);
+
+    LOG(INFO) << "Cloud Discovery Service (IFEX) starting...";
     LOG(INFO) << "  gRPC listen: " << FLAGS_grpc_listen;
     LOG(INFO) << "  PostgreSQL: " << FLAGS_postgres_host << ":" << FLAGS_postgres_port
               << "/" << FLAGS_postgres_db;
@@ -41,28 +58,45 @@ int main(int argc, char* argv[]) {
     }
     LOG(INFO) << "Connected to PostgreSQL";
 
-    // Create gRPC service config
-    ifex::cloud::GrpcServiceConfig grpc_config;
-    grpc_config.listen_address = FLAGS_grpc_listen;
-    grpc_config.num_threads = FLAGS_grpc_threads;
-    grpc_config.enable_health_check = true;
-    grpc_config.enable_reflection = true;
-
-    // Create service implementation
+    // Create service implementation (inherits from all IFEX service classes)
     auto service_impl = std::make_unique<ifex::cloud::discovery::CloudDiscoveryServiceImpl>(
         pg_client);
 
-    // Create and start gRPC server
-    ifex::cloud::GrpcServiceBase server(grpc_config);
-    server.register_service(service_impl.get());
+    // Enable gRPC health checking and reflection
+    grpc::EnableDefaultHealthCheckService(true);
+    grpc::reflection::InitProtoReflectionServerBuilderPlugin();
 
-    if (!server.start()) {
+    // Create gRPC server
+    grpc::ServerBuilder builder;
+    builder.AddListeningPort(FLAGS_grpc_listen, grpc::InsecureServerCredentials());
+
+    // Register all IFEX service interfaces (one per method)
+    // The service_impl inherits from all these service base classes
+    namespace proto = swdv::cloud_discovery_service;
+    builder.RegisterService(static_cast<proto::list_vehicles_service::Service*>(service_impl.get()));
+    builder.RegisterService(static_cast<proto::get_vehicle_services_service::Service*>(service_impl.get()));
+    builder.RegisterService(static_cast<proto::query_services_by_name_service::Service*>(service_impl.get()));
+    builder.RegisterService(static_cast<proto::get_fleet_service_stats_service::Service*>(service_impl.get()));
+    builder.RegisterService(static_cast<proto::find_vehicles_with_service_service::Service*>(service_impl.get()));
+    builder.RegisterService(static_cast<proto::healthy_service::Service*>(service_impl.get()));
+
+    std::unique_ptr<grpc::Server> grpc_server = builder.BuildAndStart();
+    if (!grpc_server) {
         LOG(ERROR) << "Failed to start gRPC server";
         return 1;
     }
 
-    LOG(INFO) << "Cloud Discovery Service listening on " << server.bound_address();
-    server.wait();
+    LOG(INFO) << "Cloud Discovery Service listening on " << FLAGS_grpc_listen;
+
+    // Wait for shutdown signal
+    while (!g_shutdown) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+
+    LOG(INFO) << "Shutting down...";
+
+    // Shutdown gRPC server
+    grpc_server->Shutdown();
 
     LOG(INFO) << "Cloud Discovery Service shutdown complete";
     return 0;

@@ -1,0 +1,371 @@
+---
+name: cloud_dispatcher_service
+major_version: 1
+minor_version: 0
+description: >
+  Cloud-side fleet dispatcher service for remote procedure calls to vehicle services.
+  Provides synchronous and asynchronous RPC invocation with timeout handling,
+  correlation tracking, and fleet-wide method execution.
+
+namespaces:
+  - name: dispatcher
+    description: Cloud dispatcher operations for fleet RPC
+
+    enumerations:
+      - name: cloud_rpc_status_t
+        datatype: uint8
+        description: Status of an RPC request
+        options:
+          - name: RPC_UNKNOWN
+            value: 0
+            description: Unknown status
+          - name: RPC_PENDING
+            value: 1
+            description: Request sent, waiting for response
+          - name: RPC_SUCCESS
+            value: 2
+            description: Response received successfully
+          - name: RPC_FAILED
+            value: 3
+            description: Vehicle returned error
+          - name: RPC_TIMEOUT
+            value: 4
+            description: No response within timeout
+          - name: RPC_VEHICLE_OFFLINE
+            value: 5
+            description: Vehicle not reachable
+          - name: RPC_SERVICE_UNAVAILABLE
+            value: 6
+            description: Service not available on vehicle
+          - name: RPC_METHOD_NOT_FOUND
+            value: 7
+            description: Method not found on service
+          - name: RPC_INVALID_PARAMETERS
+            value: 8
+            description: Invalid parameters provided
+          - name: RPC_TRANSPORT_ERROR
+            value: 9
+            description: Transport layer error (Kafka/MQTT)
+          - name: RPC_CANCELLED
+            value: 10
+            description: Request was cancelled
+
+    structs:
+      - name: call_method_request_t
+        description: Request to call a method on a vehicle service
+        members:
+          - name: vehicle_id
+            datatype: string
+            description: Target vehicle identifier
+          - name: service_name
+            datatype: string
+            description: Target service name
+          - name: method_name
+            datatype: string
+            description: Method to invoke
+          - name: parameters_json
+            datatype: string
+            description: JSON-encoded parameters
+            mandatory: false
+          - name: timeout_ms
+            datatype: uint32
+            description: Timeout in milliseconds (default 30000)
+            mandatory: false
+          - name: requester_id
+            datatype: string
+            description: Identity of requester for tracking
+            mandatory: false
+
+      - name: call_method_response_t
+        description: Result of a synchronous method call
+        members:
+          - name: correlation_id
+            datatype: string
+            description: Correlation ID for tracking
+          - name: status
+            datatype: cloud_rpc_status_t
+            description: Call status
+          - name: result_json
+            datatype: string
+            description: JSON-encoded result (if successful)
+            mandatory: false
+          - name: error_message
+            datatype: string
+            description: Error message (if failed)
+            mandatory: false
+          - name: duration_ms
+            datatype: uint32
+            description: Round-trip time in milliseconds
+          - name: service_endpoint
+            datatype: string
+            description: Which endpoint handled the call
+            mandatory: false
+
+      - name: call_method_async_response_t
+        description: Response to an async method call request
+        members:
+          - name: correlation_id
+            datatype: string
+            description: Correlation ID for polling
+          - name: accepted
+            datatype: boolean
+            description: Whether request was accepted
+          - name: error_message
+            datatype: string
+            description: Error if not accepted
+            mandatory: false
+
+      - name: rpc_status_t
+        description: Status of an RPC request (for polling)
+        members:
+          - name: correlation_id
+            datatype: string
+            description: Correlation ID
+          - name: vehicle_id
+            datatype: string
+            description: Target vehicle
+          - name: service_name
+            datatype: string
+            description: Target service
+          - name: method_name
+            datatype: string
+            description: Called method
+          - name: status
+            datatype: cloud_rpc_status_t
+            description: Current status
+          - name: result_json
+            datatype: string
+            description: Result (if completed)
+            mandatory: false
+          - name: error_message
+            datatype: string
+            description: Error (if failed)
+            mandatory: false
+          - name: duration_ms
+            datatype: uint32
+            description: Duration in milliseconds
+          - name: completed
+            datatype: boolean
+            description: Whether the RPC has completed
+          - name: created_at_ms
+            datatype: uint64
+            description: When request was created
+          - name: responded_at_ms
+            datatype: uint64
+            description: When response was received
+            mandatory: false
+          - name: requester_id
+            datatype: string
+            description: Who initiated this call
+            mandatory: false
+
+      - name: rpc_request_summary_t
+        description: Summary of an RPC request for listing
+        members:
+          - name: correlation_id
+            datatype: string
+          - name: vehicle_id
+            datatype: string
+          - name: service_name
+            datatype: string
+          - name: method_name
+            datatype: string
+          - name: status
+            datatype: cloud_rpc_status_t
+          - name: completed
+            datatype: boolean
+          - name: created_at_ms
+            datatype: uint64
+          - name: responded_at_ms
+            datatype: uint64
+            mandatory: false
+          - name: duration_ms
+            datatype: uint32
+          - name: requester_id
+            datatype: string
+            mandatory: false
+
+      - name: list_rpc_requests_filter_t
+        description: Filters for listing RPC requests
+        members:
+          - name: vehicle_id_filter
+            datatype: string
+            mandatory: false
+          - name: service_name_filter
+            datatype: string
+            mandatory: false
+          - name: requester_id_filter
+            datatype: string
+            mandatory: false
+          - name: pending_only
+            datatype: boolean
+            mandatory: false
+          - name: failed_only
+            datatype: boolean
+            mandatory: false
+          - name: since_ms
+            datatype: uint64
+            mandatory: false
+          - name: page_size
+            datatype: int32
+            mandatory: false
+          - name: page_token
+            datatype: string
+            mandatory: false
+
+      - name: list_rpc_requests_response_t
+        description: List of RPC requests
+        members:
+          - name: requests
+            datatype: rpc_request_summary_t[]
+          - name: next_page_token
+            datatype: string
+            mandatory: false
+          - name: total_count
+            datatype: int32
+
+      - name: cancel_rpc_response_t
+        description: Result of cancel operation
+        members:
+          - name: success
+            datatype: boolean
+          - name: error_message
+            datatype: string
+            mandatory: false
+
+      - name: fleet_call_request_t
+        description: Request to call a method on multiple vehicles
+        members:
+          - name: vehicle_ids
+            datatype: string[]
+            description: Explicit list of target vehicles
+            mandatory: false
+          - name: fleet_id
+            datatype: string
+            description: OR all vehicles in this fleet
+            mandatory: false
+          - name: region
+            datatype: string
+            description: OR all vehicles in this region
+            mandatory: false
+          - name: service_name
+            datatype: string
+          - name: method_name
+            datatype: string
+          - name: parameters_json
+            datatype: string
+            mandatory: false
+          - name: timeout_ms
+            datatype: uint32
+            mandatory: false
+          - name: requester_id
+            datatype: string
+            mandatory: false
+          - name: parallel
+            datatype: boolean
+            description: Execute in parallel (default true)
+            mandatory: false
+
+      - name: fleet_call_result_t
+        description: Result of a fleet method call for one vehicle
+        members:
+          - name: vehicle_id
+            datatype: string
+          - name: correlation_id
+            datatype: string
+          - name: status
+            datatype: cloud_rpc_status_t
+          - name: result_json
+            datatype: string
+            mandatory: false
+          - name: error_message
+            datatype: string
+            mandatory: false
+          - name: duration_ms
+            datatype: uint32
+
+      - name: fleet_call_response_t
+        description: Aggregate result of a fleet method call
+        members:
+          - name: total_vehicles
+            datatype: int32
+          - name: successful
+            datatype: int32
+          - name: failed
+            datatype: int32
+          - name: pending
+            datatype: int32
+          - name: results
+            datatype: fleet_call_result_t[]
+
+    methods:
+      - name: call_method
+        description: >
+          Synchronous RPC call to a vehicle service.
+          Blocks until response or timeout.
+        input:
+          - name: request
+            datatype: call_method_request_t
+            mandatory: true
+        output:
+          - name: result
+            datatype: call_method_response_t
+
+      - name: call_method_async
+        description: >
+          Asynchronous RPC call. Returns correlation_id for polling.
+        input:
+          - name: request
+            datatype: call_method_request_t
+            mandatory: true
+        output:
+          - name: result
+            datatype: call_method_async_response_t
+
+      - name: get_rpc_status
+        description: Get status/result of an RPC request by correlation_id
+        input:
+          - name: correlation_id
+            datatype: string
+            mandatory: true
+        output:
+          - name: status
+            datatype: rpc_status_t
+
+      - name: list_rpc_requests
+        description: List RPC requests with optional filtering
+        input:
+          - name: filter
+            datatype: list_rpc_requests_filter_t
+            mandatory: false
+        output:
+          - name: result
+            datatype: list_rpc_requests_response_t
+
+      - name: cancel_rpc
+        description: Cancel a pending RPC request
+        input:
+          - name: correlation_id
+            datatype: string
+            mandatory: true
+        output:
+          - name: result
+            datatype: cancel_rpc_response_t
+
+      - name: call_fleet_method
+        description: >
+          Invoke a method on multiple vehicles.
+          Can target explicit vehicle list, fleet ID, or region.
+        input:
+          - name: request
+            datatype: fleet_call_request_t
+            mandatory: true
+        output:
+          - name: result
+            datatype: fleet_call_response_t
+
+      - name: healthy
+        description: Check if dispatcher is ready to accept requests
+        output:
+          - name: is_healthy
+            datatype: boolean

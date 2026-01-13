@@ -39,7 +39,7 @@ CREATE INDEX idx_vehicle_enrichment_fleet ON vehicle_enrichment(fleet_id);
 CREATE INDEX idx_vehicle_enrichment_region ON vehicle_enrichment(region);
 
 -- =============================================================================
--- Jobs registry (from content_id=202)
+-- Jobs registry (unified: cloud-created + vehicle-created)
 -- =============================================================================
 CREATE TABLE jobs (
     id SERIAL PRIMARY KEY,
@@ -52,22 +52,29 @@ CREATE TABLE jobs (
     scheduled_time VARCHAR(64),
     recurrence_rule VARCHAR(128),
     next_run_time VARCHAR(64),
+    end_time VARCHAR(64),
     status VARCHAR(32) DEFAULT 'pending',
     wake_policy SMALLINT DEFAULT 0,      -- 0=NO_WAKE, 1=WAKE_REQUIRED
     sleep_policy SMALLINT DEFAULT 0,     -- 0=SLEEP_NORMAL, 1=INHIBIT_UNTIL_COMPLETE
     wake_lead_time_s INTEGER DEFAULT 0,  -- seconds before scheduled_time to wake
     created_at_ms BIGINT,
     updated_at_ms BIGINT,
+    -- Sync tracking
+    origin VARCHAR(16) DEFAULT 'vehicle',     -- 'cloud' or 'vehicle'
+    sync_state VARCHAR(16) DEFAULT 'synced',  -- 'pending' (awaiting vehicle confirm), 'synced'
+    created_by VARCHAR(128),                  -- User/API that created (for cloud-created)
     sync_created_at TIMESTAMPTZ DEFAULT NOW(),
     sync_updated_at TIMESTAMPTZ DEFAULT NOW(),
     UNIQUE(vehicle_id, job_id)
 );
 
-COMMENT ON TABLE jobs IS 'Scheduled jobs synced from vehicles (content_id=202)';
+COMMENT ON TABLE jobs IS 'Scheduled jobs (cloud-created and vehicle-synced). origin tracks source, sync_state tracks confirmation.';
 
 CREATE INDEX idx_jobs_vehicle ON jobs(vehicle_id);
 CREATE INDEX idx_jobs_status ON jobs(status);
 CREATE INDEX idx_jobs_service ON jobs(service_name);
+CREATE INDEX idx_jobs_sync_state ON jobs(sync_state);
+CREATE INDEX idx_jobs_origin ON jobs(origin);
 
 -- =============================================================================
 -- Job execution history
@@ -247,42 +254,3 @@ LEFT JOIN vehicle_schemas vs ON sr.schema_hash = vs.schema_hash
 GROUP BY sr.schema_hash, sr.service_name, sr.version, sr.methods, sr.struct_definitions, sr.enum_definitions, sr.first_seen_at
 ORDER BY sr.service_name, sr.version;
 
--- =============================================================================
--- Offboard calendar (cloud-side scheduled jobs, pre-sync to vehicle)
--- =============================================================================
-CREATE TABLE offboard_calendar (
-    id SERIAL PRIMARY KEY,
-    vehicle_id VARCHAR(64) NOT NULL REFERENCES vehicles(vehicle_id) ON DELETE CASCADE,
-    job_id VARCHAR(64) UNIQUE NOT NULL,
-
-    -- Job definition
-    title VARCHAR(255),
-    service_name VARCHAR(128) NOT NULL,
-    method_name VARCHAR(128) NOT NULL,
-    parameters JSONB DEFAULT '{}'::jsonb,
-
-    -- Schedule
-    scheduled_time TIMESTAMPTZ,
-    recurrence_rule VARCHAR(255),  -- iCal RRULE
-    end_time TIMESTAMPTZ,
-
-    -- Wake/Sleep policies
-    wake_policy SMALLINT DEFAULT 0,      -- 0=NO_WAKE, 1=WAKE_REQUIRED
-    sleep_policy SMALLINT DEFAULT 0,     -- 0=SLEEP_NORMAL, 1=INHIBIT_UNTIL_COMPLETE
-    wake_lead_time_s INTEGER DEFAULT 0,
-
-    -- Sync status
-    sync_status VARCHAR(20) DEFAULT 'pending',  -- pending, synced, failed
-    synced_at TIMESTAMPTZ,
-    sync_error TEXT,
-
-    -- Metadata
-    created_at TIMESTAMPTZ DEFAULT NOW(),
-    created_by VARCHAR(128)  -- User/API that created
-);
-
-COMMENT ON TABLE offboard_calendar IS 'Cloud-side scheduled jobs (synced to vehicle when online)';
-
-CREATE INDEX idx_offboard_calendar_vehicle ON offboard_calendar(vehicle_id);
-CREATE INDEX idx_offboard_calendar_sync_status ON offboard_calendar(sync_status);
-CREATE INDEX idx_offboard_calendar_scheduled ON offboard_calendar(scheduled_time);

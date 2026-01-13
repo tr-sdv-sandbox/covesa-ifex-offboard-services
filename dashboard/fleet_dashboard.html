@@ -641,7 +641,7 @@
             display: grid;
             grid-template-columns: 280px 1fr;
             gap: 1.5rem;
-            min-height: 500px;
+            min-height: 800px;
         }
 
         .calendar-vehicle-item {
@@ -917,6 +917,11 @@
             overflow-x: auto;
         }
 
+        #calendar-view {
+            max-height: calc(100vh - 180px);
+            overflow-y: auto;
+        }
+
         .week-grid {
             display: grid;
             grid-template-columns: 60px repeat(7, 1fr);
@@ -957,7 +962,7 @@
         .time-slot {
             background: white;
             padding: 0.25rem;
-            min-height: 32px;
+            min-height: 28px;
             cursor: pointer;
             transition: background 0.15s;
             position: relative;
@@ -989,19 +994,24 @@
             cursor: pointer;
         }
 
-        .calendar-event.confirmed {
+        .calendar-event.synced {
             background: #28a745;
-            color: white;
-        }
-
-        .calendar-event.sent {
-            background: #667eea;
             color: white;
         }
 
         .calendar-event.pending {
             background: #ffc107;
             color: #333;
+        }
+
+        .calendar-event.failed {
+            background: #dc3545;
+            color: white;
+        }
+
+        .calendar-event.out_of_sync {
+            background: #fd7e14;
+            color: white;
         }
 
         .calendar-event.paused {
@@ -2497,11 +2507,17 @@ Status: ${syncInfo}</div>`;
             // Parameters - render as form
             renderParamForm(job.parameters);
 
-            // Scheduled time (convert to datetime-local format)
+            // Scheduled time (convert to datetime-local format in LOCAL timezone)
             if (job.scheduled_time) {
                 try {
                     const dt = new Date(job.scheduled_time);
-                    const localStr = dt.toISOString().slice(0, 16);
+                    // Format as local time for datetime-local input (YYYY-MM-DDTHH:MM)
+                    const year = dt.getFullYear();
+                    const month = String(dt.getMonth() + 1).padStart(2, '0');
+                    const day = String(dt.getDate()).padStart(2, '0');
+                    const hours = String(dt.getHours()).padStart(2, '0');
+                    const minutes = String(dt.getMinutes()).padStart(2, '0');
+                    const localStr = `${year}-${month}-${day}T${hours}:${minutes}`;
                     document.getElementById('job-detail-time').value = localStr;
                 } catch {
                     document.getElementById('job-detail-time').value = '';

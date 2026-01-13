@@ -1,0 +1,564 @@
+---
+name: cloud_scheduler_service
+major_version: 1
+minor_version: 0
+description: >
+  Cloud-side fleet scheduler service for managing scheduled jobs on vehicles.
+  Provides job creation, management, and fleet-wide scheduling operations.
+  Jobs are synced to vehicles via the scheduler sync protocol (content_id=202).
+
+namespaces:
+  - name: scheduler
+    description: Cloud scheduler operations for fleet job management
+
+    enumerations:
+      - name: cloud_job_status_t
+        datatype: uint8
+        description: Status of a scheduled job
+        options:
+          - name: JOB_UNKNOWN
+            value: 0
+            description: Unknown status
+          - name: JOB_PENDING
+            value: 1
+            description: Job created, waiting to run
+          - name: JOB_SCHEDULED
+            value: 2
+            description: Job scheduled on vehicle
+          - name: JOB_RUNNING
+            value: 3
+            description: Currently executing
+          - name: JOB_COMPLETED
+            value: 4
+            description: Finished successfully
+          - name: JOB_FAILED
+            value: 5
+            description: Execution failed
+          - name: JOB_CANCELLED
+            value: 6
+            description: Job was cancelled
+          - name: JOB_PAUSED
+            value: 7
+            description: Temporarily paused
+
+      - name: sync_state_t
+        datatype: uint8
+        description: Synchronization state between cloud and vehicle
+        options:
+          - name: SYNC_UNKNOWN
+            value: 0
+            description: Unknown sync state
+          - name: SYNC_PENDING
+            value: 1
+            description: Command sent to vehicle, waiting for confirmation
+          - name: SYNC_CONFIRMED
+            value: 2
+            description: Vehicle confirmed job exists (steady state)
+          - name: SYNC_FAILED
+            value: 3
+            description: Vehicle failed to create/process job
+          - name: SYNC_OUT_OF_SYNC
+            value: 4
+            description: Cloud and vehicle state have diverged
+
+    structs:
+      - name: job_info_t
+        description: Full job information
+        members:
+          - name: vehicle_id
+            datatype: string
+          - name: fleet_id
+            datatype: string
+            mandatory: false
+          - name: region
+            datatype: string
+            mandatory: false
+          - name: job_id
+            datatype: string
+          - name: title
+            datatype: string
+          - name: service
+            datatype: string
+          - name: method
+            datatype: string
+          - name: parameters_json
+            datatype: string
+            mandatory: false
+          - name: status
+            datatype: cloud_job_status_t
+          - name: scheduled_time_ms
+            datatype: uint64
+            description: Epoch milliseconds UTC
+          - name: recurrence_rule
+            datatype: string
+            description: iCal RRULE format
+            mandatory: false
+          - name: next_run_time_ms
+            datatype: uint64
+            description: Epoch milliseconds UTC
+            mandatory: false
+          - name: created_at_ms
+            datatype: uint64
+          - name: updated_at_ms
+            datatype: uint64
+          - name: created_by
+            datatype: string
+            mandatory: false
+          - name: sync_state
+            datatype: sync_state_t
+            description: Cloud-vehicle synchronization state
+          - name: synced_at_ms
+            datatype: uint64
+            description: When vehicle last confirmed this job
+            mandatory: false
+
+      - name: execution_info_t
+        description: Job execution record
+        members:
+          - name: execution_id
+            datatype: string
+          - name: status
+            datatype: cloud_job_status_t
+          - name: executed_at_ms
+            datatype: uint64
+          - name: duration_ms
+            datatype: uint32
+          - name: result_json
+            datatype: string
+            mandatory: false
+          - name: error_message
+            datatype: string
+            mandatory: false
+          - name: next_run_time_ms
+            datatype: uint64
+            description: Epoch milliseconds UTC
+            mandatory: false
+
+      - name: create_job_request_t
+        description: Request to create a new scheduled job
+        members:
+          - name: vehicle_id
+            datatype: string
+          - name: title
+            datatype: string
+            description: Human-readable title
+          - name: service
+            datatype: string
+            description: Target service name
+          - name: method
+            datatype: string
+            description: Method to invoke
+          - name: parameters_json
+            datatype: string
+            mandatory: false
+          - name: scheduled_time_ms
+            datatype: uint64
+            description: When to first run (epoch milliseconds UTC)
+          - name: recurrence_rule
+            datatype: string
+            description: iCal RRULE for recurring jobs
+            mandatory: false
+          - name: end_time_ms
+            datatype: uint64
+            description: When to stop recurring (epoch milliseconds UTC)
+            mandatory: false
+          - name: created_by
+            datatype: string
+            mandatory: false
+
+      - name: create_job_response_t
+        description: Result of job creation
+        members:
+          - name: success
+            datatype: boolean
+          - name: job_id
+            datatype: string
+            description: Cloud-generated job ID
+            mandatory: false
+          - name: error_message
+            datatype: string
+            mandatory: false
+
+      - name: update_job_request_t
+        description: Request to update a job (partial update)
+        members:
+          - name: vehicle_id
+            datatype: string
+          - name: job_id
+            datatype: string
+          - name: title
+            datatype: string
+            description: Empty = no change
+            mandatory: false
+          - name: scheduled_time_ms
+            datatype: uint64
+            description: Epoch milliseconds UTC (0 = no change)
+            mandatory: false
+          - name: recurrence_rule
+            datatype: string
+            mandatory: false
+          - name: parameters_json
+            datatype: string
+            mandatory: false
+          - name: end_time_ms
+            datatype: uint64
+            description: Epoch milliseconds UTC (0 = no change)
+            mandatory: false
+
+      - name: simple_response_t
+        description: Simple success/error response
+        members:
+          - name: success
+            datatype: boolean
+          - name: error_message
+            datatype: string
+            mandatory: false
+
+      - name: get_job_response_t
+        description: Response for get job request
+        members:
+          - name: found
+            datatype: boolean
+          - name: job
+            datatype: job_info_t
+            mandatory: false
+
+      - name: list_jobs_filter_t
+        description: Filters for listing jobs
+        members:
+          - name: vehicle_id_filter
+            datatype: string
+            mandatory: false
+          - name: fleet_id_filter
+            datatype: string
+            mandatory: false
+          - name: region_filter
+            datatype: string
+            mandatory: false
+          - name: service_filter
+            datatype: string
+            mandatory: false
+          - name: status_filter
+            datatype: cloud_job_status_t
+            description: 0 = all statuses
+            mandatory: false
+          - name: created_by_filter
+            datatype: string
+            mandatory: false
+          - name: recurring_only
+            datatype: boolean
+            mandatory: false
+          - name: page_size
+            datatype: int32
+            mandatory: false
+          - name: page_token
+            datatype: string
+            mandatory: false
+
+      - name: list_jobs_response_t
+        description: List of jobs
+        members:
+          - name: jobs
+            datatype: job_info_t[]
+          - name: next_page_token
+            datatype: string
+            mandatory: false
+          - name: total_count
+            datatype: int32
+
+      - name: get_job_executions_request_t
+        description: Request for job execution history
+        members:
+          - name: vehicle_id
+            datatype: string
+          - name: job_id
+            datatype: string
+          - name: limit
+            datatype: int32
+            description: Default 100
+            mandatory: false
+          - name: since_ms
+            datatype: uint64
+            mandatory: false
+
+      - name: get_job_executions_response_t
+        description: Job execution history
+        members:
+          - name: vehicle_id
+            datatype: string
+          - name: job_id
+            datatype: string
+          - name: executions
+            datatype: execution_info_t[]
+          - name: total_count
+            datatype: int32
+
+      - name: create_fleet_job_request_t
+        description: Create same job on multiple vehicles
+        members:
+          - name: vehicle_ids
+            datatype: string[]
+            description: Explicit list
+            mandatory: false
+          - name: fleet_id
+            datatype: string
+            mandatory: false
+          - name: region
+            datatype: string
+            mandatory: false
+          - name: service_filter
+            datatype: string
+            description: Only vehicles with this service
+            mandatory: false
+          - name: title
+            datatype: string
+          - name: service
+            datatype: string
+          - name: method
+            datatype: string
+          - name: parameters_json
+            datatype: string
+            mandatory: false
+          - name: scheduled_time_ms
+            datatype: uint64
+            description: Epoch milliseconds UTC
+          - name: recurrence_rule
+            datatype: string
+            mandatory: false
+          - name: end_time_ms
+            datatype: uint64
+            description: Epoch milliseconds UTC
+            mandatory: false
+          - name: created_by
+            datatype: string
+            mandatory: false
+
+      - name: fleet_job_result_t
+        description: Result for one vehicle in fleet job creation
+        members:
+          - name: vehicle_id
+            datatype: string
+          - name: success
+            datatype: boolean
+          - name: job_id
+            datatype: string
+            mandatory: false
+          - name: error_message
+            datatype: string
+            mandatory: false
+
+      - name: create_fleet_job_response_t
+        description: Aggregate fleet job creation result
+        members:
+          - name: total_vehicles
+            datatype: int32
+          - name: successful
+            datatype: int32
+          - name: failed
+            datatype: int32
+          - name: results
+            datatype: fleet_job_result_t[]
+          - name: fleet_job_id
+            datatype: string
+            description: ID to track the fleet operation
+            mandatory: false
+
+      - name: delete_fleet_job_request_t
+        description: Delete jobs from multiple vehicles
+        members:
+          - name: vehicle_ids
+            datatype: string[]
+          - name: job_ids
+            datatype: string[]
+
+      - name: delete_fleet_job_response_t
+        description: Fleet job deletion result
+        members:
+          - name: total_deletions
+            datatype: int32
+          - name: successful
+            datatype: int32
+          - name: failed
+            datatype: int32
+
+      - name: fleet_job_stats_filter_t
+        description: Filters for fleet job statistics
+        members:
+          - name: fleet_id_filter
+            datatype: string
+            mandatory: false
+          - name: region_filter
+            datatype: string
+            mandatory: false
+
+      - name: job_stats_t
+        description: Statistics for a service/method combination
+        members:
+          - name: service
+            datatype: string
+          - name: method
+            datatype: string
+          - name: total_jobs
+            datatype: int32
+          - name: pending
+            datatype: int32
+          - name: running
+            datatype: int32
+          - name: completed
+            datatype: int32
+          - name: failed
+            datatype: int32
+          - name: recurring
+            datatype: int32
+
+      - name: fleet_job_stats_response_t
+        description: Fleet-wide job statistics
+        members:
+          - name: total_jobs
+            datatype: int32
+          - name: total_vehicles_with_jobs
+            datatype: int32
+          - name: by_service_method
+            datatype: job_stats_t[]
+
+    methods:
+      - name: create_job
+        description: Create a new scheduled job on a vehicle
+        input:
+          - name: request
+            datatype: create_job_request_t
+            mandatory: true
+        output:
+          - name: result
+            datatype: create_job_response_t
+
+      - name: update_job
+        description: Update an existing job (partial update)
+        input:
+          - name: request
+            datatype: update_job_request_t
+            mandatory: true
+        output:
+          - name: result
+            datatype: simple_response_t
+
+      - name: delete_job
+        description: Delete a job
+        input:
+          - name: vehicle_id
+            datatype: string
+            mandatory: true
+          - name: job_id
+            datatype: string
+            mandatory: true
+        output:
+          - name: result
+            datatype: simple_response_t
+
+      - name: pause_job
+        description: Pause a job (stop scheduling)
+        input:
+          - name: vehicle_id
+            datatype: string
+            mandatory: true
+          - name: job_id
+            datatype: string
+            mandatory: true
+        output:
+          - name: result
+            datatype: simple_response_t
+
+      - name: resume_job
+        description: Resume a paused job
+        input:
+          - name: vehicle_id
+            datatype: string
+            mandatory: true
+          - name: job_id
+            datatype: string
+            mandatory: true
+        output:
+          - name: result
+            datatype: simple_response_t
+
+      - name: trigger_job
+        description: Trigger immediate job execution
+        input:
+          - name: vehicle_id
+            datatype: string
+            mandatory: true
+          - name: job_id
+            datatype: string
+            mandatory: true
+        output:
+          - name: result
+            datatype: simple_response_t
+
+      - name: get_job
+        description: Get detailed job information
+        input:
+          - name: vehicle_id
+            datatype: string
+            mandatory: true
+          - name: job_id
+            datatype: string
+            mandatory: true
+        output:
+          - name: result
+            datatype: get_job_response_t
+
+      - name: list_jobs
+        description: List jobs with optional filtering
+        input:
+          - name: filter
+            datatype: list_jobs_filter_t
+            mandatory: false
+        output:
+          - name: result
+            datatype: list_jobs_response_t
+
+      - name: get_job_executions
+        description: Get job execution history
+        input:
+          - name: request
+            datatype: get_job_executions_request_t
+            mandatory: true
+        output:
+          - name: result
+            datatype: get_job_executions_response_t
+
+      - name: create_fleet_job
+        description: Create same job on multiple vehicles
+        input:
+          - name: request
+            datatype: create_fleet_job_request_t
+            mandatory: true
+        output:
+          - name: result
+            datatype: create_fleet_job_response_t
+
+      - name: delete_fleet_job
+        description: Delete jobs from multiple vehicles
+        input:
+          - name: request
+            datatype: delete_fleet_job_request_t
+            mandatory: true
+        output:
+          - name: result
+            datatype: delete_fleet_job_response_t
+
+      - name: get_fleet_job_stats
+        description: Get fleet-wide job statistics
+        input:
+          - name: filter
+            datatype: fleet_job_stats_filter_t
+            mandatory: false
+        output:
+          - name: result
+            datatype: fleet_job_stats_response_t
+
+      - name: healthy
+        description: Check if scheduler service is ready
+        output:
+          - name: is_healthy
+            datatype: boolean

@@ -2,10 +2,56 @@
 
 #include <glog/logging.h>
 #include <unordered_map>
-
-#include "scheduler_codec.hpp"
+#include <unordered_set>
+#include <ctime>
+#include <sstream>
+#include <iomanip>
 
 namespace ifex::offboard {
+
+// Parse ISO8601 datetime string to epoch milliseconds
+// Handles formats: "2026-01-09T17:00:00.000Z" and "2026-01-09 17:00:00+00"
+static uint64_t Iso8601ToEpochMs(const std::string& iso_str) {
+    if (iso_str.empty()) {
+        return 0;
+    }
+
+    std::tm tm = {};
+    std::istringstream ss(iso_str);
+
+    // Try parsing with T delimiter: 2026-01-09T17:00:00
+    ss >> std::get_time(&tm, "%Y-%m-%dT%H:%M:%S");
+    if (ss.fail()) {
+        // Try parsing with space delimiter: 2026-01-09 17:00:00
+        ss.clear();
+        ss.str(iso_str);
+        ss >> std::get_time(&tm, "%Y-%m-%d %H:%M:%S");
+        if (ss.fail()) {
+            LOG(WARNING) << "Failed to parse ISO8601 datetime: " << iso_str;
+            return 0;
+        }
+    }
+
+    // Convert to epoch seconds (UTC)
+    time_t epoch_sec = timegm(&tm);
+    if (epoch_sec == -1) {
+        LOG(WARNING) << "Failed to convert to epoch: " << iso_str;
+        return 0;
+    }
+
+    // Parse optional milliseconds
+    uint64_t ms = 0;
+    char c;
+    if (ss >> c && c == '.') {
+        int frac;
+        ss >> frac;
+        std::string remaining = std::to_string(frac);
+        while (remaining.length() < 3) remaining += "0";
+        ms = std::stoull(remaining.substr(0, 3));
+    }
+
+    return static_cast<uint64_t>(epoch_sec) * 1000 + ms;
+}
 
 SchedulerStore::SchedulerStore(std::shared_ptr<PostgresClient> db)
     : db_(std::move(db)) {}
@@ -20,103 +66,110 @@ void SchedulerStore::upsert_vehicle(const std::string& vehicle_id,
 
     // Update fleet_id and region if provided
     if (!fleet_id.empty() || !region.empty()) {
-        // TODO: Add fleet_id and region columns to vehicles table
-        // For now, just log the enrichment data
         VLOG(1) << "Vehicle " << vehicle_id << " fleet=" << fleet_id
                 << " region=" << region;
     }
 }
 
-void SchedulerStore::process_offboard_message(
-    const scheduler::scheduler_offboard_t& msg) {
+bool SchedulerStore::process_v2_sync_message(
+    const std::string& vehicle_id,
+    const std::string& fleet_id,
+    const std::string& region,
+    const swdv::scheduler_sync_v2::V2C_SyncMessage& msg) {
 
-    // Extract vehicle_id from offboard metadata (verified by ACL)
-    const std::string& vehicle_id = msg.metadata().vehicle_id();
-    const std::string& fleet_id = msg.metadata().fleet_id();
-    const std::string& region = msg.metadata().region();
-
-    // Get the embedded sync message
-    const auto& sync_msg = msg.sync_message();
+    LOG(INFO) << "Processing sync from vehicle " << vehicle_id
+              << ": " << msg.jobs_size() << " jobs, "
+              << msg.executions_size() << " executions, "
+              << msg.deleted_job_ids_size() << " deletions";
 
     // Ensure vehicle exists with enrichment
     upsert_vehicle(vehicle_id, fleet_id, region);
 
-    // Process each event
-    for (const auto& event : sync_msg.events()) {
-        LOG(INFO) << "Processing " << scheduler_event_type_name(event.event_type())
-                  << " for vehicle " << vehicle_id;
-
-        switch (event.event_type()) {
-            case swdv::scheduler_sync_envelope::FULL_SYNC:
-                handle_full_sync(vehicle_id, sync_msg);
-                break;
-
-            case swdv::scheduler_sync_envelope::JOB_CREATED:
-                if (event.has_job_info()) {
-                    handle_job_created(vehicle_id, event.job_info());
-                }
-                break;
-
-            case swdv::scheduler_sync_envelope::JOB_UPDATED:
-                if (event.has_job_info()) {
-                    handle_job_updated(vehicle_id, event.job_info());
-                }
-                break;
-
-            case swdv::scheduler_sync_envelope::JOB_DELETED:
-                handle_job_deleted(vehicle_id, event.job_id());
-                break;
-
-            case swdv::scheduler_sync_envelope::JOB_EXECUTED:
-                if (event.has_execution_result()) {
-                    handle_job_executed(vehicle_id, event.execution_result());
-                }
-                break;
-
-            case swdv::scheduler_sync_envelope::HEARTBEAT:
-                handle_heartbeat(vehicle_id, event.timestamp_ms());
-                break;
+    // Build set of job_ids from sync message
+    std::unordered_set<std::string> synced_job_ids;
+    for (const auto& job : msg.jobs()) {
+        if (!job.deleted()) {
+            synced_job_ids.insert(job.job_id());
         }
     }
 
-    // Update sync state
-    if (!sync_msg.events().empty()) {
-        uint64_t last_seq = sync_msg.events().rbegin()->sequence_number();
-        update_sync_state(vehicle_id, last_seq, sync_msg.state_checksum());
-    }
-}
-
-void SchedulerStore::handle_full_sync(
-    const std::string& vehicle_id,
-    const swdv::scheduler_sync_envelope::sync_message_t& msg) {
-
-    LOG(INFO) << "Full sync for vehicle " << vehicle_id
-              << " with " << msg.active_jobs_count() << " active jobs";
-
-    // Start transaction
+    // Start transaction for atomic updates
     db_->begin_transaction();
 
-    // Delete all existing jobs for this vehicle
-    db_->execute(
-        "DELETE FROM jobs WHERE vehicle_id = $1",
-        {vehicle_id});
-
-    // Insert all jobs from the sync
-    for (const auto& event : msg.events()) {
-        if (event.event_type() == swdv::scheduler_sync_envelope::FULL_SYNC &&
-            event.has_job_info()) {
-            handle_job_created(vehicle_id, event.job_info());
+    // Delete jobs NOT in sync that are either:
+    // - status='deleting' (deletion confirmed by vehicle)
+    // - sync_state='synced' (vehicle deleted it - not a pending cloud job)
+    // Keep jobs with origin='cloud' AND sync_state='pending' (command not yet received)
+    if (!synced_job_ids.empty()) {
+        // Build comma-separated list of quoted job_ids for SQL IN clause
+        std::string job_ids_list;
+        for (const auto& jid : synced_job_ids) {
+            if (!job_ids_list.empty()) job_ids_list += ",";
+            job_ids_list += "'" + jid + "'";  // Simple quoting (job_ids are generated, safe)
         }
+
+        db_->execute(
+            "DELETE FROM jobs WHERE vehicle_id = $1 "
+            "AND job_id NOT IN (" + job_ids_list + ") "
+            "AND (status = 'deleting' OR sync_state = 'synced')",
+            {vehicle_id});
+    } else {
+        // No jobs in sync - delete all synced/deleting jobs, keep pending cloud jobs
+        db_->execute(
+            "DELETE FROM jobs WHERE vehicle_id = $1 "
+            "AND (status = 'deleting' OR sync_state = 'synced')",
+            {vehicle_id});
+    }
+
+    // Upsert all jobs from the sync (sets sync_state='synced')
+    for (const auto& job : msg.jobs()) {
+        if (!job.deleted()) {  // Skip tombstones
+            handle_v2_job_record(vehicle_id, job);
+        }
+    }
+
+    // Process execution records (append-only)
+    for (const auto& exec : msg.executions()) {
+        handle_v2_execution_record(vehicle_id, exec);
     }
 
     db_->commit();
+
+    // Update vehicle last_seen_at
+    db_->execute(
+        "UPDATE vehicles SET last_seen_at = NOW() WHERE vehicle_id = $1",
+        {vehicle_id});
+
+    return true;
 }
 
-void SchedulerStore::handle_job_created(
+void SchedulerStore::handle_v2_job_record(
     const std::string& vehicle_id,
-    const swdv::scheduler_sync_envelope::job_info_t& info) {
+    const swdv::scheduler_sync_v2::JobRecord& job) {
 
-    LOG(INFO) << "Creating job: " << job_info_to_string(info);
+    LOG(INFO) << "Job: " << job.job_id() << " (" << job.title() << ")"
+              << " service=" << job.service() << "." << job.method()
+              << " status=" << job_status_to_string(job.status());
+
+    // Convert scheduled_time_ms to ISO 8601 string for PostgreSQL
+    std::string scheduled_time_str;
+    if (job.scheduled_time_ms() > 0) {
+        time_t secs = job.scheduled_time_ms() / 1000;
+        struct tm* tm = gmtime(&secs);
+        char buf[32];
+        strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S+00", tm);
+        scheduled_time_str = buf;
+    }
+
+    // Convert next_run_time_ms to ISO 8601 string
+    std::string next_run_time_str;
+    if (job.next_run_time_ms() > 0) {
+        time_t secs = job.next_run_time_ms() / 1000;
+        struct tm* tm = gmtime(&secs);
+        char buf[32];
+        strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S+00", tm);
+        next_run_time_str = buf;
+    }
 
     db_->execute(
         R"(
@@ -124,8 +177,8 @@ void SchedulerStore::handle_job_created(
             vehicle_id, job_id, title, service_name, method_name,
             parameters, scheduled_time, recurrence_rule, next_run_time,
             status, wake_policy, sleep_policy, wake_lead_time_s,
-            created_at_ms, updated_at_ms
-        ) VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+            created_at_ms, updated_at_ms, origin, sync_state
+        ) VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11, $12, $13, $14, $15, 'vehicle', 'synced')
         ON CONFLICT (vehicle_id, job_id)
         DO UPDATE SET
             title = EXCLUDED.title,
@@ -141,130 +194,55 @@ void SchedulerStore::handle_job_created(
             wake_lead_time_s = EXCLUDED.wake_lead_time_s,
             created_at_ms = EXCLUDED.created_at_ms,
             updated_at_ms = EXCLUDED.updated_at_ms,
+            sync_state = 'synced',
             sync_updated_at = NOW()
         )",
         {
             vehicle_id,
-            info.job_id(),
-            info.title(),
-            info.service(),
-            info.method(),
-            info.parameters().empty() ? "{}" : info.parameters(),
-            info.scheduled_time(),
-            info.recurrence_rule(),
-            info.next_run_time(),
-            job_status_to_string(info.status()),
-            std::to_string(static_cast<int>(info.wake_policy())),
-            std::to_string(static_cast<int>(info.sleep_policy())),
-            std::to_string(info.wake_lead_time_s()),
-            std::to_string(info.created_at_ms()),
-            std::to_string(info.updated_at_ms())
+            job.job_id(),
+            job.title(),
+            job.service(),
+            job.method(),
+            job.parameters_json().empty() ? "{}" : job.parameters_json(),
+            scheduled_time_str.empty() ? "" : scheduled_time_str,
+            job.recurrence_rule(),
+            next_run_time_str.empty() ? "" : next_run_time_str,
+            job_status_to_string(job.status()),
+            std::to_string(static_cast<int>(job.wake_policy())),
+            std::to_string(static_cast<int>(job.sleep_policy())),
+            std::to_string(job.wake_lead_time_s()),
+            std::to_string(job.created_at_ms()),
+            std::to_string(job.updated_at_ms())
         });
 }
 
-void SchedulerStore::handle_job_updated(
+void SchedulerStore::handle_v2_execution_record(
     const std::string& vehicle_id,
-    const swdv::scheduler_sync_envelope::job_info_t& info) {
+    const swdv::scheduler_sync_v2::ExecutionRecord& exec) {
 
-    LOG(INFO) << "Updating job: " << info.job_id();
+    LOG(INFO) << "Execution: " << exec.execution_id()
+              << " job=" << exec.job_id()
+              << " status=" << job_status_to_string(exec.status())
+              << " duration=" << exec.duration_ms() << "ms";
 
-    db_->execute(
-        R"(
-        UPDATE jobs SET
-            title = $3,
-            service_name = $4,
-            method_name = $5,
-            parameters = $6::jsonb,
-            scheduled_time = $7,
-            recurrence_rule = $8,
-            next_run_time = $9,
-            status = $10,
-            wake_policy = $11,
-            sleep_policy = $12,
-            wake_lead_time_s = $13,
-            updated_at_ms = $14,
-            sync_updated_at = NOW()
-        WHERE vehicle_id = $1 AND job_id = $2
-        )",
-        {
-            vehicle_id,
-            info.job_id(),
-            info.title(),
-            info.service(),
-            info.method(),
-            info.parameters().empty() ? "{}" : info.parameters(),
-            info.scheduled_time(),
-            info.recurrence_rule(),
-            info.next_run_time(),
-            job_status_to_string(info.status()),
-            std::to_string(static_cast<int>(info.wake_policy())),
-            std::to_string(static_cast<int>(info.sleep_policy())),
-            std::to_string(info.wake_lead_time_s()),
-            std::to_string(info.updated_at_ms())
-        });
-}
-
-void SchedulerStore::handle_job_deleted(
-    const std::string& vehicle_id,
-    const std::string& job_id) {
-
-    LOG(INFO) << "Deleting job: " << job_id << " from vehicle " << vehicle_id;
-
-    db_->execute(
-        "DELETE FROM jobs WHERE vehicle_id = $1 AND job_id = $2",
-        {vehicle_id, job_id});
-}
-
-void SchedulerStore::handle_job_executed(
-    const std::string& vehicle_id,
-    const swdv::scheduler_sync_envelope::execution_result_t& result) {
-
-    LOG(INFO) << "Job executed: " << result.job_id()
-              << " status=" << job_status_to_string(result.status())
-              << " duration=" << result.duration_ms() << "ms";
-
-    // Insert execution result
+    // Use execution_id as primary key to avoid duplicates
     db_->execute(
         R"(
         INSERT INTO job_executions (
             vehicle_id, job_id, status, executed_at_ms, duration_ms,
-            result, error_message, next_run_time
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            result, error_message
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+        ON CONFLICT DO NOTHING
         )",
         {
             vehicle_id,
-            result.job_id(),
-            job_status_to_string(result.status()),
-            std::to_string(result.executed_at_ms()),
-            std::to_string(result.duration_ms()),
-            result.result(),
-            result.error_message(),
-            result.next_run_time()
+            exec.job_id(),
+            job_status_to_string(exec.status()),
+            std::to_string(exec.executed_at_ms()),
+            std::to_string(exec.duration_ms()),
+            exec.result_json(),
+            exec.error_message()
         });
-
-    // Update job's next_run_time if provided
-    if (!result.next_run_time().empty()) {
-        db_->execute(
-            R"(
-            UPDATE jobs SET
-                next_run_time = $3,
-                sync_updated_at = NOW()
-            WHERE vehicle_id = $1 AND job_id = $2
-            )",
-            {vehicle_id, result.job_id(), result.next_run_time()});
-    }
-}
-
-void SchedulerStore::handle_heartbeat(
-    const std::string& vehicle_id,
-    uint64_t timestamp_ns) {
-
-    VLOG(1) << "Scheduler heartbeat from vehicle " << vehicle_id;
-
-    // Update vehicle last_seen_at
-    db_->execute(
-        "UPDATE vehicles SET last_seen_at = NOW() WHERE vehicle_id = $1",
-        {vehicle_id});
 }
 
 void SchedulerStore::update_sync_state(
@@ -289,18 +267,20 @@ uint64_t SchedulerStore::get_last_sequence(const std::string& vehicle_id) {
 }
 
 std::string SchedulerStore::job_status_to_string(
-    swdv::scheduler_sync_envelope::job_sync_status_t status) {
+    swdv::scheduler_sync_v2::JobStatus status) {
     switch (status) {
-        case swdv::scheduler_sync_envelope::PENDING:
+        case swdv::scheduler_sync_v2::JOB_STATUS_PENDING:
             return "pending";
-        case swdv::scheduler_sync_envelope::RUNNING:
+        case swdv::scheduler_sync_v2::JOB_STATUS_RUNNING:
             return "running";
-        case swdv::scheduler_sync_envelope::COMPLETED:
+        case swdv::scheduler_sync_v2::JOB_STATUS_COMPLETED:
             return "completed";
-        case swdv::scheduler_sync_envelope::FAILED:
+        case swdv::scheduler_sync_v2::JOB_STATUS_FAILED:
             return "failed";
-        case swdv::scheduler_sync_envelope::CANCELLED:
+        case swdv::scheduler_sync_v2::JOB_STATUS_CANCELLED:
             return "cancelled";
+        case swdv::scheduler_sync_v2::JOB_STATUS_PAUSED:
+            return "paused";
         default:
             return "unknown";
     }
@@ -311,8 +291,9 @@ void SchedulerStore::set_reconcile_callback(ReconcileCallback callback) {
 }
 
 bool SchedulerStore::has_pending_offboard_items(const std::string& vehicle_id) {
+    // Check for jobs with sync_state='pending' (awaiting vehicle confirmation)
     auto result = db_->execute_scalar(
-        "SELECT COUNT(*) FROM offboard_calendar WHERE vehicle_id = $1 AND sync_status = 'pending'",
+        "SELECT COUNT(*) FROM jobs WHERE vehicle_id = $1 AND sync_state = 'pending'",
         {vehicle_id});
 
     return result && std::stoi(*result) > 0;
@@ -323,90 +304,54 @@ std::vector<ReconcileCommand> SchedulerStore::reconcile_with_offboard(
 
     std::vector<ReconcileCommand> commands;
 
-    LOG(INFO) << "Reconciling offboard_calendar with vehicle " << vehicle_id;
+    LOG(INFO) << "Checking pending jobs for vehicle " << vehicle_id;
 
-    // Get all offboard calendar items for this vehicle
-    // Use EXTRACT(EPOCH) to get epoch milliseconds for scheduled_time and end_time
-    auto offboard_result = db_->execute(
+    // Get jobs with sync_state='pending' (cloud-created jobs awaiting vehicle confirmation)
+    auto result = db_->execute(
         R"(
-        SELECT job_id, title, service_name, method_name, parameters,
-               COALESCE(EXTRACT(EPOCH FROM scheduled_time) * 1000, 0)::bigint as scheduled_time_ms,
-               recurrence_rule,
-               COALESCE(EXTRACT(EPOCH FROM end_time) * 1000, 0)::bigint as end_time_ms,
-               wake_policy, sleep_policy, wake_lead_time_s, sync_status
-        FROM offboard_calendar
-        WHERE vehicle_id = $1
+        SELECT job_id, title, service_name, method_name,
+               COALESCE(parameters::text, '{}') as parameters,
+               scheduled_time, recurrence_rule, end_time,
+               wake_policy, sleep_policy, wake_lead_time_s, status
+        FROM jobs
+        WHERE vehicle_id = $1 AND sync_state = 'pending' AND status != 'deleting'
         )",
         {vehicle_id});
 
-    if (!offboard_result.ok()) {
-        LOG(ERROR) << "Failed to query offboard_calendar: " << offboard_result.error();
+    if (!result.ok()) {
+        LOG(ERROR) << "Failed to query pending jobs: " << result.error();
         return commands;
     }
 
-    // Get all current jobs for this vehicle (synced from vehicle)
-    auto vehicle_result = db_->execute(
-        R"(
-        SELECT job_id, title, service_name, method_name, parameters,
-               scheduled_time, recurrence_rule, updated_at_ms
-        FROM jobs
-        WHERE vehicle_id = $1
-        )",
-        {vehicle_id});
-
-    // Build map of vehicle jobs by job_id
-    std::unordered_map<std::string, bool> vehicle_jobs;
-    if (vehicle_result.ok()) {
-        for (const auto& row : vehicle_result) {
-            vehicle_jobs[row.get_string("job_id")] = true;
-        }
-    }
-
-    // Process offboard calendar items
-    for (const auto& row : offboard_result) {
-        std::string job_id = row.get_string("job_id");
-        std::string sync_status = row.get_string("sync_status");
+    // Generate commands for pending jobs (retry/resend logic)
+    for (int i = 0; i < result.num_rows(); ++i) {
+        auto row = result.row(i);
+        std::string job_id = row.get_string(0);
 
         ReconcileCommand cmd;
         cmd.job_id = job_id;
-        cmd.title = row.get_string("title");
-        cmd.service = row.get_string("service_name");
-        cmd.method = row.get_string("method_name");
-        cmd.parameters_json = row.get_string("parameters");
-        cmd.scheduled_time_ms = static_cast<uint64_t>(row.get_int64("scheduled_time_ms"));
-        cmd.recurrence_rule = row.get_string("recurrence_rule");
-        cmd.end_time_ms = static_cast<uint64_t>(row.get_int64("end_time_ms"));
-        cmd.wake_policy = row.get_int("wake_policy");
-        cmd.sleep_policy = row.get_int("sleep_policy");
-        cmd.wake_lead_time_s = static_cast<uint32_t>(row.get_int("wake_lead_time_s"));
+        cmd.title = row.get_string(1);
+        cmd.service = row.get_string(2);
+        cmd.method = row.get_string(3);
+        cmd.parameters_json = row.get_string(4);
 
-        if (vehicle_jobs.find(job_id) == vehicle_jobs.end()) {
-            // Job exists in cloud but not on vehicle - CREATE
-            cmd.type = ReconcileCommand::CREATE;
-            commands.push_back(cmd);
-            LOG(INFO) << "Reconcile: CREATE job " << job_id << " on vehicle " << vehicle_id;
-        } else if (sync_status == "pending") {
-            // Job exists on both but cloud has pending changes - UPDATE
-            cmd.type = ReconcileCommand::UPDATE;
-            commands.push_back(cmd);
-            LOG(INFO) << "Reconcile: UPDATE job " << job_id << " on vehicle " << vehicle_id;
-        }
-        // Remove from map so we can find vehicle-only jobs
-        vehicle_jobs.erase(job_id);
+        // Parse scheduled_time and end_time strings to epoch milliseconds
+        std::string scheduled_time_str = row.is_null(5) ? "" : row.get_string(5);
+        std::string end_time_str = row.is_null(7) ? "" : row.get_string(7);
+        cmd.scheduled_time_ms = Iso8601ToEpochMs(scheduled_time_str);
+        cmd.recurrence_rule = row.get_string(6);
+        cmd.end_time_ms = Iso8601ToEpochMs(end_time_str);
+        cmd.wake_policy = row.is_null(8) ? 0 : row.get_int(8);
+        cmd.sleep_policy = row.is_null(9) ? 0 : row.get_int(9);
+        cmd.wake_lead_time_s = row.is_null(10) ? 0 : static_cast<uint32_t>(row.get_int(10));
+
+        // All pending jobs are CREATE (initial sync) or UPDATE (re-sync)
+        cmd.type = ReconcileCommand::CREATE;
+        commands.push_back(cmd);
+        LOG(INFO) << "Reconcile: resend job " << job_id << " to vehicle " << vehicle_id;
     }
 
-    // Check for jobs to delete (on vehicle but not in offboard_calendar)
-    // Only delete if the job was previously synced from cloud (has matching offboard entry that was deleted)
-    // For now, we don't auto-delete vehicle-created jobs
-
-    LOG(INFO) << "Reconciliation for " << vehicle_id << ": " << commands.size() << " commands";
-
-    // Mark synced items as synced after sending commands
-    if (!commands.empty()) {
-        db_->execute(
-            "UPDATE offboard_calendar SET sync_status = 'syncing' WHERE vehicle_id = $1 AND sync_status = 'pending'",
-            {vehicle_id});
-    }
+    LOG(INFO) << "Reconciliation for " << vehicle_id << ": " << commands.size() << " pending jobs";
 
     return commands;
 }

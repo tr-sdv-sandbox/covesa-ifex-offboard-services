@@ -24,10 +24,13 @@ struct VehicleSummaryData {
     std::string region;
     std::string model;
     int year = 0;
+    std::string owner;
     int service_count = 0;
     int job_count = 0;
     int64_t last_seen_ms = 0;
     bool is_online = false;
+    int64_t created_at_ms = 0;
+    int64_t updated_at_ms = 0;
 };
 
 /**
@@ -89,6 +92,7 @@ public:
      * List vehicles with optional filters
      */
     QueryResult<query::VehicleSummaryData> list_vehicles(
+        const std::string& vehicle_id_pattern,
         const std::string& fleet_id_filter,
         const std::string& region_filter,
         bool online_only,

@@ -6,9 +6,8 @@
 #include <functional>
 
 #include "postgres_client.hpp"
-#include "scheduler-offboard.pb.h"
-#include "scheduler-sync-envelope.pb.h"
 #include "scheduler-command-envelope.pb.h"
+#include "scheduler-sync-v2.pb.h"
 
 namespace ifex::offboard {
 
@@ -43,39 +42,13 @@ public:
                         const std::string& fleet_id = "",
                         const std::string& region = "");
 
-    /// Process an offboard scheduler message (from Kafka)
-    void process_offboard_message(
-        const scheduler::scheduler_offboard_t& msg);
-
-    /// Handle FULL_SYNC event - replace all jobs for vehicle
-    void handle_full_sync(
+    /// Process a v2 sync message (from Kafka)
+    /// Returns true if processed successfully, false if parse failed
+    bool process_v2_sync_message(
         const std::string& vehicle_id,
-        const swdv::scheduler_sync_envelope::sync_message_t& msg);
-
-    /// Handle JOB_CREATED event
-    void handle_job_created(
-        const std::string& vehicle_id,
-        const swdv::scheduler_sync_envelope::job_info_t& info);
-
-    /// Handle JOB_UPDATED event
-    void handle_job_updated(
-        const std::string& vehicle_id,
-        const swdv::scheduler_sync_envelope::job_info_t& info);
-
-    /// Handle JOB_DELETED event
-    void handle_job_deleted(
-        const std::string& vehicle_id,
-        const std::string& job_id);
-
-    /// Handle JOB_EXECUTED event
-    void handle_job_executed(
-        const std::string& vehicle_id,
-        const swdv::scheduler_sync_envelope::execution_result_t& result);
-
-    /// Handle HEARTBEAT event
-    void handle_heartbeat(
-        const std::string& vehicle_id,
-        uint64_t timestamp_ns);
+        const std::string& fleet_id,
+        const std::string& region,
+        const swdv::scheduler_sync_v2::V2C_SyncMessage& msg);
 
     /// Update sync state
     void update_sync_state(
@@ -103,7 +76,17 @@ private:
 
     /// Convert job status enum to string
     static std::string job_status_to_string(
-        swdv::scheduler_sync_envelope::job_sync_status_t status);
+        swdv::scheduler_sync_v2::JobStatus status);
+
+    /// Handle a v2 JobRecord - upsert into jobs table
+    void handle_v2_job_record(
+        const std::string& vehicle_id,
+        const swdv::scheduler_sync_v2::JobRecord& job);
+
+    /// Handle a v2 ExecutionRecord - insert into job_executions table
+    void handle_v2_execution_record(
+        const std::string& vehicle_id,
+        const swdv::scheduler_sync_v2::ExecutionRecord& exec);
 };
 
 }  // namespace ifex::offboard

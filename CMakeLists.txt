@@ -159,6 +159,9 @@ else()
     target_link_libraries(grpc_service_base PUBLIC ${GRPC_REFLECTION})
 endif()
 
+# Offboard Platform library (OffboardTransport abstraction)
+add_subdirectory(libs/offboard-platform)
+
 # =============================================================================
 # Ingestion Services (Vehicle → Cloud)
 # =============================================================================
@@ -220,7 +223,7 @@ target_link_libraries(scheduler_mirror PRIVATE
 # API Services (Cloud gRPC APIs)
 # =============================================================================
 
-# Discovery API Service
+# Discovery API Service (IFEX-based)
 add_executable(discovery_api
     services/api/discovery/main.cpp
     services/api/discovery/discovery_service_impl.cpp
@@ -229,17 +232,20 @@ add_executable(discovery_api
 target_include_directories(discovery_api PRIVATE
     services/api/discovery
     libs/postgres_client/include
-    libs/grpc_service_base/include
 )
 target_link_libraries(discovery_api PRIVATE
-    grpc_service_base
+    offboard_platform
     postgres_client
-    ifex_offboard_proto
     glog::glog
     gflags
 )
+if(gRPC_FOUND)
+    target_link_libraries(discovery_api PRIVATE gRPC::grpc++_reflection)
+else()
+    target_link_libraries(discovery_api PRIVATE ${GRPC_REFLECTION})
+endif()
 
-# Dispatcher API Service
+# Dispatcher API Service (IFEX-based)
 add_executable(dispatcher_api
     services/api/dispatcher/main.cpp
     services/api/dispatcher/dispatcher_service_impl.cpp
@@ -249,20 +255,24 @@ add_executable(dispatcher_api
 )
 target_include_directories(dispatcher_api PRIVATE
     services/api/dispatcher
-    libs/grpc_service_base/include
     libs/envelope_codec/include
     ${RDKAFKA_INCLUDE_DIRS}
 )
 target_link_libraries(dispatcher_api PRIVATE
-    grpc_service_base
+    offboard_platform
     envelope_codec
     ifex_offboard_proto
     ${RDKAFKA_LIBRARIES}
     glog::glog
     gflags
 )
+if(gRPC_FOUND)
+    target_link_libraries(dispatcher_api PRIVATE gRPC::grpc++_reflection)
+else()
+    target_link_libraries(dispatcher_api PRIVATE ${GRPC_REFLECTION})
+endif()
 
-# Scheduler API Service
+# Scheduler API Service (IFEX-based)
 add_executable(scheduler_api
     services/api/scheduler/main.cpp
     services/api/scheduler/scheduler_service_impl.cpp
@@ -272,17 +282,21 @@ add_executable(scheduler_api
 target_include_directories(scheduler_api PRIVATE
     services/api/scheduler
     libs/postgres_client/include
-    libs/grpc_service_base/include
     ${RDKAFKA_INCLUDE_DIRS}
 )
 target_link_libraries(scheduler_api PRIVATE
-    grpc_service_base
-    postgres_client
+    offboard_platform
     ifex_offboard_proto
+    postgres_client
     ${RDKAFKA_LIBRARIES}
     glog::glog
     gflags
 )
+if(gRPC_FOUND)
+    target_link_libraries(scheduler_api PRIVATE gRPC::grpc++_reflection)
+else()
+    target_link_libraries(scheduler_api PRIVATE ${GRPC_REFLECTION})
+endif()
 
 # =============================================================================
 # Exporter Services (DB → Kafka)

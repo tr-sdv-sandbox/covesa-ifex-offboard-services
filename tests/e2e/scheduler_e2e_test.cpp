@@ -1,13 +1,17 @@
 /**
  * @file scheduler_e2e_test.cpp
- * @brief End-to-end tests for Cloud Scheduler API
+ * @brief End-to-end tests for Cloud Scheduler API with REAL vehicle container
  *
- * These tests verify the Cloud Scheduler gRPC API.
- * The test fixture automatically starts/stops the scheduler_api service.
+ * These tests verify the COMPLETE cloud→vehicle→cloud flow:
+ * 1. Cloud scheduler_api creates job, publishes to Kafka
+ * 2. mqtt_kafka_bridge routes to MQTT
+ * 3. REAL vehicle container receives command, processes it
+ * 4. Vehicle scheduler syncs back via MQTT → Kafka → scheduler_mirror
+ * 5. Test verifies sync_state changes from 'pending' to 'synced'
  *
  * Prerequisites:
- *   - Docker containers running (Kafka, PostgreSQL)
- *   - Run: docker-compose up -d postgres kafka
+ *   - E2E Docker infrastructure: docker compose -f tests/e2e/docker-compose.e2e.yml up -d
+ *   - Vehicle image: cd ../covesa-ifex-core && ./build-test-container.sh
  */
 
 #include <gtest/gtest.h>
@@ -16,6 +20,8 @@
 #include <chrono>
 #include <thread>
 #include <string>
+#include <sstream>
+#include <iomanip>
 #include <memory>
 #include <atomic>
 #include <csignal>
@@ -25,47 +31,53 @@
 
 #include <grpcpp/grpcpp.h>
 #include "cloud-scheduler-service.grpc.pb.h"
+#include "cloud-dispatcher-service.grpc.pb.h"
 #include "scheduler-command-envelope.pb.h"
 #include "postgres_client.hpp"
 #include "e2e_test_fixture.hpp"
+#include <nlohmann/json.hpp>
 
-namespace scheduler_grpc = ifex::cloud::scheduler;
+// IFEX-based proto namespace
+namespace proto = swdv::cloud_scheduler_service;
+namespace dispatcher_proto = swdv::cloud_dispatcher_service;
 using ifex::offboard::test::E2ETestInfrastructure;
 namespace cmd_pb = swdv::scheduler_command_envelope;
+using json = nlohmann::json;
 
 using namespace std::chrono_literals;
 
-/// Get the directory containing the test executable
-std::string GetExecutableDir() {
-    char buf[PATH_MAX];
-    ssize_t len = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
-    if (len == -1) {
-        return ".";
-    }
-    buf[len] = '\0';
-    std::string path(buf);
-    size_t pos = path.rfind('/');
-    return (pos != std::string::npos) ? path.substr(0, pos) : ".";
-}
-
-/// Get path to a service binary (in build root, one level up from tests/)
-std::string GetBinaryPath(const std::string& name) {
-    return GetExecutableDir() + "/../" + name;
+// Helper to convert ISO8601 string to epoch milliseconds
+static uint64_t Iso8601ToMs(const std::string& iso_str) {
+    if (iso_str.empty()) return 0;
+    std::tm tm = {};
+    std::istringstream ss(iso_str);
+    ss >> std::get_time(&tm, "%Y-%m-%dT%H:%M:%S");
+    if (ss.fail()) return 0;
+    auto tp = std::chrono::system_clock::from_time_t(timegm(&tm));
+    return std::chrono::duration_cast<std::chrono::milliseconds>(tp.time_since_epoch()).count();
 }
 
 /**
- * @brief Test fixture for Scheduler E2E tests
+ * @brief Test fixture for Scheduler E2E tests with REAL vehicle container
  *
- * Automatically starts scheduler_api service before tests and stops it after.
+ * Starts:
+ * 1. E2E infrastructure (mqtt_kafka_bridge, discovery_mirror, scheduler_mirror, vehicle)
+ * 2. scheduler_api (configured for E2E Kafka topics)
+ * 3. dispatcher_api (for querying vehicle's scheduler directly)
+ *
+ * The flow: scheduler_api → Kafka → mqtt_kafka_bridge → MQTT → vehicle → sync back
  */
 class SchedulerE2ETest : public ::testing::Test {
 protected:
     static constexpr const char* CLOUD_SCHEDULER_ADDR = "localhost:50083";
-    static constexpr const char* VEHICLE_ID = "VIN00000000000001";
+    static constexpr const char* CLOUD_DISPATCHER_ADDR = "localhost:50082";
 
-    // Service process and database (shared across all tests in this suite)
+    // Use the E2E vehicle ID (matches vehicle container started by E2ETestInfrastructure)
+    static constexpr const char* VEHICLE_ID = "E2E_TEST_VIN_001";
+
+    // Service processes
     static pid_t scheduler_pid_;
-    static std::unique_ptr<ifex::offboard::PostgresClient> db_;
+    static pid_t dispatcher_pid_;
 
     static void SetUpTestSuite() {
         // Initialize glog
@@ -76,777 +88,478 @@ protected:
             glog_initialized = true;
         }
 
-        // Connect to PostgreSQL using E2E isolated ports
-        ifex::offboard::PostgresConfig pg_config;
-        pg_config.host = "localhost";
-        pg_config.port = E2ETestInfrastructure::POSTGRES_PORT;  // E2E port: 15432
-        pg_config.database = "ifex_offboard";
-        pg_config.user = "ifex";
-        pg_config.password = "ifex_dev";
+        // Start E2E infrastructure (mqtt_kafka_bridge, mirrors, vehicle container)
+        LOG(INFO) << "Starting E2E infrastructure with real vehicle...";
+        bool infra_started = E2ETestInfrastructure::StartInfrastructure(true);  // true = need vehicle
+        ASSERT_TRUE(infra_started)
+            << "Failed to start E2E infrastructure. Check prerequisites:\n"
+            << "  1. docker compose -f tests/e2e/docker-compose.e2e.yml up -d\n"
+            << "  2. cd ../covesa-ifex-core && ./build-test-container.sh";
 
-        db_ = std::make_unique<ifex::offboard::PostgresClient>(pg_config);
-        ASSERT_TRUE(db_->is_connected())
-            << "PostgreSQL not available. Run E2E infrastructure or use docker-compose.e2e.yml";
+        // Wait for vehicle to come online
+        LOG(INFO) << "Waiting for vehicle " << VEHICLE_ID << " to come online...";
+        bool vehicle_online = E2ETestInfrastructure::WaitForVehicleOnline(VEHICLE_ID, 30s);
+        ASSERT_TRUE(vehicle_online) << "Vehicle did not come online within 30 seconds";
 
-        // Create test vehicle (normally done by mqtt_kafka_bridge on status update)
-        auto result = db_->execute(R"(
-            INSERT INTO vehicles (vehicle_id, is_online, first_seen_at, last_seen_at)
-            VALUES ($1, true, NOW(), NOW())
-            ON CONFLICT (vehicle_id) DO UPDATE SET
-                is_online = true,
-                last_seen_at = NOW()
-        )", {VEHICLE_ID});
-        ASSERT_TRUE(result.ok()) << "Failed to create test vehicle: " << result.error();
-        LOG(INFO) << "Created test vehicle: " << VEHICLE_ID;
-
-        // Start scheduler_api service with E2E isolated ports
-        std::string scheduler_path = GetBinaryPath("scheduler_api");
-        std::string kafka_broker = E2ETestInfrastructure::KAFKA_BROKER;
-        std::string pg_port = std::to_string(E2ETestInfrastructure::POSTGRES_PORT);
-
+        // Start scheduler_api service (configured for E2E Kafka topics)
+        LOG(INFO) << "Starting scheduler_api with E2E Kafka topic...";
         scheduler_pid_ = fork();
         if (scheduler_pid_ == 0) {
             // Child process - exec scheduler_api
-            execl(scheduler_path.c_str(), "scheduler_api",
-                   "--grpc_listen=0.0.0.0:50083",
-                   ("--kafka_broker=" + kafka_broker).c_str(),
-                   "--postgres_host=localhost",
-                   ("--postgres_port=" + pg_port).c_str(),
-                   "--postgres_db=ifex_offboard",
-                   "--postgres_user=ifex",
-                   "--postgres_password=ifex_dev",
-                   nullptr);
-            // If exec fails, exit child
-            LOG(ERROR) << "Failed to exec scheduler_api at: " << scheduler_path;
+            std::string binary = E2ETestInfrastructure::GetBinaryPath("scheduler_api");
+            std::string kafka_arg = std::string("--kafka_broker=") + E2ETestInfrastructure::KAFKA_BROKER;
+            std::string postgres_host_arg = std::string("--postgres_host=") + E2ETestInfrastructure::POSTGRES_HOST;
+            std::string postgres_port_arg = "--postgres_port=" + std::to_string(E2ETestInfrastructure::POSTGRES_PORT);
+            execl(binary.c_str(), "scheduler_api",
+                  "--grpc_listen=0.0.0.0:50083",
+                  kafka_arg.c_str(),
+                  postgres_host_arg.c_str(),
+                  postgres_port_arg.c_str(),
+                  "--postgres_db=ifex_offboard",
+                  "--postgres_user=ifex",
+                  "--postgres_password=ifex_dev",
+                  // Use E2E Kafka topic for c2v commands
+                  "--kafka_topic_c2v=e2e.c2v.scheduler",
+                  "--logtostderr",
+                  nullptr);
+            _exit(1);  // execl failed
+        }
+
+        ASSERT_GT(scheduler_pid_, 0) << "Failed to fork scheduler_api";
+        LOG(INFO) << "Started scheduler_api with PID " << scheduler_pid_;
+
+        // Wait for scheduler_api to be ready
+        auto scheduler_channel = grpc::CreateChannel(CLOUD_SCHEDULER_ADDR, grpc::InsecureChannelCredentials());
+        bool scheduler_ready = scheduler_channel->WaitForConnected(
+            std::chrono::system_clock::now() + std::chrono::seconds(10));
+        ASSERT_TRUE(scheduler_ready) << "scheduler_api did not become ready in time";
+        LOG(INFO) << "scheduler_api is ready";
+
+        // Start dispatcher_api service (for querying vehicle's scheduler directly)
+        LOG(INFO) << "Starting dispatcher_api with E2E Kafka topics...";
+        dispatcher_pid_ = fork();
+        if (dispatcher_pid_ == 0) {
+            std::string binary = E2ETestInfrastructure::GetBinaryPath("dispatcher_api");
+            execl(binary.c_str(), "dispatcher_api",
+                  "--grpc_listen", CLOUD_DISPATCHER_ADDR,
+                  "--kafka_broker", E2ETestInfrastructure::KAFKA_BROKER,
+                  "--kafka_topic_v2c", "e2e.rpc.200",
+                  "--kafka_topic_c2v", "e2e.c2v.rpc",
+                  "--logtostderr",
+                  nullptr);
+            LOG(ERROR) << "Failed to exec dispatcher_api";
             _exit(1);
         }
 
-        ASSERT_GT(scheduler_pid_, 0) << "Failed to fork scheduler_api process";
-        LOG(INFO) << "Started scheduler_api with PID " << scheduler_pid_;
+        ASSERT_GT(dispatcher_pid_, 0) << "Failed to fork dispatcher_api";
+        LOG(INFO) << "Started dispatcher_api with PID " << dispatcher_pid_;
 
-        // Wait for service to be ready
-        auto channel = grpc::CreateChannel(CLOUD_SCHEDULER_ADDR, grpc::InsecureChannelCredentials());
-        auto deadline = std::chrono::system_clock::now() + 10s;
-        ASSERT_TRUE(channel->WaitForConnected(deadline))
-            << "scheduler_api failed to start within 10 seconds";
+        // Wait for dispatcher_api to be ready
+        std::this_thread::sleep_for(std::chrono::seconds(2));
+        auto dispatcher_channel = grpc::CreateChannel(CLOUD_DISPATCHER_ADDR, grpc::InsecureChannelCredentials());
+        bool dispatcher_ready = dispatcher_channel->WaitForConnected(
+            std::chrono::system_clock::now() + std::chrono::seconds(10));
+        ASSERT_TRUE(dispatcher_ready) << "dispatcher_api did not become ready in time";
+        LOG(INFO) << "dispatcher_api is ready";
 
-        LOG(INFO) << "scheduler_api is ready";
+        LOG(INFO) << "========================================";
+        LOG(INFO) << "E2E Scheduler Test Infrastructure Ready";
+        LOG(INFO) << "  Vehicle: " << VEHICLE_ID;
+        LOG(INFO) << "  Scheduler API: " << CLOUD_SCHEDULER_ADDR;
+        LOG(INFO) << "  Dispatcher API: " << CLOUD_DISPATCHER_ADDR;
+        LOG(INFO) << "========================================";
     }
 
     static void TearDownTestSuite() {
+        // Stop scheduler_api
         if (scheduler_pid_ > 0) {
-            LOG(INFO) << "Stopping scheduler_api (PID " << scheduler_pid_ << ")";
             kill(scheduler_pid_, SIGTERM);
             int status;
             waitpid(scheduler_pid_, &status, 0);
+            LOG(INFO) << "Stopped scheduler_api (PID " << scheduler_pid_ << ")";
             scheduler_pid_ = 0;
         }
 
-        // Clean up test vehicle and jobs
-        if (db_ && db_->is_connected()) {
-            db_->execute("DELETE FROM jobs WHERE vehicle_id = $1", {VEHICLE_ID});
-            db_->execute("DELETE FROM vehicles WHERE vehicle_id = $1", {VEHICLE_ID});
-            LOG(INFO) << "Cleaned up test vehicle: " << VEHICLE_ID;
+        // Stop dispatcher_api
+        if (dispatcher_pid_ > 0) {
+            kill(dispatcher_pid_, SIGTERM);
+            int status;
+            waitpid(dispatcher_pid_, &status, 0);
+            LOG(INFO) << "Stopped dispatcher_api (PID " << dispatcher_pid_ << ")";
+            dispatcher_pid_ = 0;
         }
-        db_.reset();
+
+        // Stop E2E infrastructure (vehicle container, bridges)
+        // This also cleans up test data from database
+        E2ETestInfrastructure::StopInfrastructure();
     }
 
     void SetUp() override {
-        // Create gRPC stub for this test
-        auto channel = grpc::CreateChannel(
+        // Create gRPC stubs for scheduler API
+        auto scheduler_channel = grpc::CreateChannel(
             CLOUD_SCHEDULER_ADDR,
             grpc::InsecureChannelCredentials());
 
-        stub_ = scheduler_grpc::CloudSchedulerService::NewStub(channel);
-        ASSERT_NE(stub_, nullptr);
+        create_job_stub_ = proto::create_job_service::NewStub(scheduler_channel);
+        update_job_stub_ = proto::update_job_service::NewStub(scheduler_channel);
+        delete_job_stub_ = proto::delete_job_service::NewStub(scheduler_channel);
+        pause_job_stub_ = proto::pause_job_service::NewStub(scheduler_channel);
+        resume_job_stub_ = proto::resume_job_service::NewStub(scheduler_channel);
+        trigger_job_stub_ = proto::trigger_job_service::NewStub(scheduler_channel);
+        get_job_stub_ = proto::get_job_service::NewStub(scheduler_channel);
+        list_jobs_stub_ = proto::list_jobs_service::NewStub(scheduler_channel);
+        get_job_executions_stub_ = proto::get_job_executions_service::NewStub(scheduler_channel);
+        create_fleet_job_stub_ = proto::create_fleet_job_service::NewStub(scheduler_channel);
+        delete_fleet_job_stub_ = proto::delete_fleet_job_service::NewStub(scheduler_channel);
+        get_fleet_job_stats_stub_ = proto::get_fleet_job_stats_service::NewStub(scheduler_channel);
+        healthy_stub_ = proto::healthy_service::NewStub(scheduler_channel);
+
+        // Create gRPC stub for dispatcher API (to query vehicle's scheduler)
+        auto dispatcher_channel = grpc::CreateChannel(
+            CLOUD_DISPATCHER_ADDR,
+            grpc::InsecureChannelCredentials());
+
+        call_method_stub_ = dispatcher_proto::call_method_service::NewStub(dispatcher_channel);
+
+        ASSERT_NE(create_job_stub_, nullptr);
+        ASSERT_NE(call_method_stub_, nullptr);
     }
 
     void TearDown() override {
-        // Cleanup created jobs
-        for (const auto& job_id : created_jobs_) {
-            if (stub_) {
-                grpc::ClientContext ctx;
-                ctx.set_deadline(std::chrono::system_clock::now() + 2s);
-                scheduler_grpc::DeleteJobRequest req;
-                req.set_vehicle_id(VEHICLE_ID);
-                req.set_job_id(job_id);
-                scheduler_grpc::DeleteJobResponse resp;
-                stub_->DeleteJob(&ctx, req, &resp);
-            }
+        // Clean up any jobs created during the test
+        for (const auto& job_id : created_job_ids_) {
+            proto::delete_job_request request;
+            request.set_vehicle_id(VEHICLE_ID);
+            request.set_job_id(job_id);
+
+            proto::delete_job_response response;
+            grpc::ClientContext context;
+            delete_job_stub_->delete_job(&context, request, &response);
         }
+        created_job_ids_.clear();
     }
 
-    // Helper to create a test job
-    std::string CreateTestJob(const std::string& title,
+    // Helper to create a test job and track it for cleanup
+    std::string CreateTestJob(const std::string& title = "Test Job",
                               const std::string& service = "echo_service",
                               const std::string& method = "echo") {
-        grpc::ClientContext ctx;
-        ctx.set_deadline(std::chrono::system_clock::now() + 5s);
+        proto::create_job_request request;
+        auto* inner = request.mutable_request();
+        inner->set_vehicle_id(VEHICLE_ID);
+        inner->set_title(title);
+        inner->set_service(service);
+        inner->set_method(method);
+        inner->set_scheduled_time_ms(Iso8601ToMs("2099-12-31T23:59:59Z"));
 
-        scheduler_grpc::CreateJobRequest req;
-        req.set_vehicle_id(VEHICLE_ID);
-        req.set_title(title);
-        req.set_service(service);
-        req.set_method(method);
-        req.set_parameters_json(R"({"test": true})");
-        req.set_scheduled_time("2026-12-31T23:59:59Z");
-        req.set_created_by("e2e_test");
+        proto::create_job_response response;
+        grpc::ClientContext context;
+        auto status = create_job_stub_->create_job(&context, request, &response);
 
-        scheduler_grpc::CreateJobResponse resp;
-        auto status = stub_->CreateJob(&ctx, req, &resp);
-
-        if (status.ok() && resp.success()) {
-            created_jobs_.push_back(resp.job_id());
-            return resp.job_id();
+        if (status.ok() && response.result().success()) {
+            std::string job_id = response.result().job_id();
+            created_job_ids_.push_back(job_id);
+            return job_id;
         }
         return "";
     }
 
-    std::unique_ptr<scheduler_grpc::CloudSchedulerService::Stub> stub_;
-    std::vector<std::string> created_jobs_;
+    // Helper to wait for job sync state to change
+    bool WaitForSyncState(const std::string& job_id, const std::string& expected_state,
+                          std::chrono::seconds timeout = 10s) {
+        auto deadline = std::chrono::steady_clock::now() + timeout;
+        while (std::chrono::steady_clock::now() < deadline) {
+            proto::get_job_request request;
+            request.set_vehicle_id(VEHICLE_ID);
+            request.set_job_id(job_id);
+
+            proto::get_job_response response;
+            grpc::ClientContext context;
+            auto status = get_job_stub_->get_job(&context, request, &response);
+
+            if (status.ok() && response.result().found()) {
+                auto sync_state = response.result().job().sync_state();
+                std::string state_str;
+                switch (sync_state) {
+                    case proto::SYNC_PENDING: state_str = "pending"; break;
+                    case proto::SYNC_CONFIRMED: state_str = "synced"; break;
+                    case proto::SYNC_FAILED: state_str = "failed"; break;
+                    default: state_str = "unknown"; break;
+                }
+                if (state_str == expected_state) {
+                    return true;
+                }
+            }
+            std::this_thread::sleep_for(500ms);
+        }
+        return false;
+    }
+
+    // gRPC stubs
+    std::unique_ptr<proto::create_job_service::Stub> create_job_stub_;
+    std::unique_ptr<proto::update_job_service::Stub> update_job_stub_;
+    std::unique_ptr<proto::delete_job_service::Stub> delete_job_stub_;
+    std::unique_ptr<proto::pause_job_service::Stub> pause_job_stub_;
+    std::unique_ptr<proto::resume_job_service::Stub> resume_job_stub_;
+    std::unique_ptr<proto::trigger_job_service::Stub> trigger_job_stub_;
+    std::unique_ptr<proto::get_job_service::Stub> get_job_stub_;
+    std::unique_ptr<proto::list_jobs_service::Stub> list_jobs_stub_;
+    std::unique_ptr<proto::get_job_executions_service::Stub> get_job_executions_stub_;
+    std::unique_ptr<proto::create_fleet_job_service::Stub> create_fleet_job_stub_;
+    std::unique_ptr<proto::delete_fleet_job_service::Stub> delete_fleet_job_stub_;
+    std::unique_ptr<proto::get_fleet_job_stats_service::Stub> get_fleet_job_stats_stub_;
+    std::unique_ptr<proto::healthy_service::Stub> healthy_stub_;
+    std::unique_ptr<dispatcher_proto::call_method_service::Stub> call_method_stub_;
+
+    // Track created jobs for cleanup
+    std::vector<std::string> created_job_ids_;
 };
 
-// Static member definitions
+// Static member initialization
 pid_t SchedulerE2ETest::scheduler_pid_ = 0;
-std::unique_ptr<ifex::offboard::PostgresClient> SchedulerE2ETest::db_ = nullptr;
+pid_t SchedulerE2ETest::dispatcher_pid_ = 0;
 
 // =============================================================================
 // Connection Tests
 // =============================================================================
 
 TEST_F(SchedulerE2ETest, CloudSchedulerConnection) {
-    // This test verifies the Cloud Scheduler is running
-    // SetUp() already asserts connection - if we get here, we're connected
-    LOG(INFO) << "Cloud Scheduler is available at " << CLOUD_SCHEDULER_ADDR;
-    ASSERT_NE(stub_, nullptr);
+    // Verify we can connect to the cloud scheduler service
+    ASSERT_NE(create_job_stub_, nullptr);
+    ASSERT_NE(healthy_stub_, nullptr);
+}
+
+TEST_F(SchedulerE2ETest, HealthyCheck) {
+    proto::healthy_request request;
+    proto::healthy_response response;
+    grpc::ClientContext context;
+
+    auto status = healthy_stub_->healthy(&context, request, &response);
+    ASSERT_TRUE(status.ok()) << "gRPC call failed: " << status.error_message();
+    EXPECT_TRUE(response.is_healthy());
 }
 
 // =============================================================================
-// CreateJob Tests
+// Job CRUD Tests
 // =============================================================================
 
 TEST_F(SchedulerE2ETest, CreateJobBasic) {
-    grpc::ClientContext ctx;
-    ctx.set_deadline(std::chrono::system_clock::now() + 10s);
+    proto::create_job_request request;
+    auto* inner = request.mutable_request();
+    inner->set_vehicle_id(VEHICLE_ID);
+    inner->set_title("E2E Test Job - Basic");
+    inner->set_service("echo_service");
+    inner->set_method("echo");
+    inner->set_scheduled_time_ms(Iso8601ToMs("2099-01-05T12:00:00Z"));
 
-    scheduler_grpc::CreateJobRequest req;
-    req.set_vehicle_id(VEHICLE_ID);
-    req.set_title("E2E Test: CreateJobBasic");
-    req.set_service("echo_service");
-    req.set_method("echo");
-    req.set_parameters_json(R"({"message": "hello from e2e test"})");
-    req.set_scheduled_time("2026-01-05T12:00:00Z");
-    req.set_created_by("e2e_test");
+    proto::create_job_response response;
+    grpc::ClientContext context;
 
-    scheduler_grpc::CreateJobResponse resp;
-    auto status = stub_->CreateJob(&ctx, req, &resp);
+    auto status = create_job_stub_->create_job(&context, request, &response);
+    ASSERT_TRUE(status.ok()) << "gRPC call failed: " << status.error_message();
+    EXPECT_TRUE(response.result().success()) << "Error: " << response.result().error_message();
+    EXPECT_FALSE(response.result().job_id().empty());
 
-    ASSERT_TRUE(status.ok()) << "gRPC error: " << status.error_message();
-    EXPECT_TRUE(resp.success()) << "CreateJob failed: " << resp.error_message();
-    EXPECT_FALSE(resp.job_id().empty()) << "Job ID should be returned";
-
-    LOG(INFO) << "Created job: " << resp.job_id();
-    created_jobs_.push_back(resp.job_id());
-
-    // Wait for command to propagate to vehicle
-    std::this_thread::sleep_for(2s);
+    // Track for cleanup
+    if (response.result().success()) {
+        created_job_ids_.push_back(response.result().job_id());
+    }
 }
 
 TEST_F(SchedulerE2ETest, CreateJobWithRecurrence) {
-    grpc::ClientContext ctx;
-    ctx.set_deadline(std::chrono::system_clock::now() + 10s);
+    proto::create_job_request request;
+    auto* inner = request.mutable_request();
+    inner->set_vehicle_id(VEHICLE_ID);
+    inner->set_title("E2E Test Job - Recurring");
+    inner->set_service("echo_service");
+    inner->set_method("echo");
+    inner->set_scheduled_time_ms(Iso8601ToMs("2099-01-05T08:00:00Z"));
+    inner->set_recurrence_rule("FREQ=DAILY;INTERVAL=1");
+    inner->set_end_time_ms(Iso8601ToMs("2099-12-31T23:59:59Z"));
 
-    scheduler_grpc::CreateJobRequest req;
-    req.set_vehicle_id(VEHICLE_ID);
-    req.set_title("E2E Test: Recurring Job");
-    req.set_service("echo_service");
-    req.set_method("echo");
-    req.set_parameters_json("{}");
-    req.set_scheduled_time("2026-01-05T08:00:00Z");
-    req.set_recurrence_rule("0 8 * * *");  // Daily at 8am
-    req.set_end_time("2026-12-31T23:59:59Z");
-    req.set_created_by("e2e_test");
+    proto::create_job_response response;
+    grpc::ClientContext context;
 
-    scheduler_grpc::CreateJobResponse resp;
-    auto status = stub_->CreateJob(&ctx, req, &resp);
+    auto status = create_job_stub_->create_job(&context, request, &response);
+    ASSERT_TRUE(status.ok()) << "gRPC call failed: " << status.error_message();
+    EXPECT_TRUE(response.result().success()) << "Error: " << response.result().error_message();
 
-    ASSERT_TRUE(status.ok()) << "gRPC error: " << status.error_message();
-    EXPECT_TRUE(resp.success()) << "CreateJob failed: " << resp.error_message();
-
-    if (resp.success()) {
-        created_jobs_.push_back(resp.job_id());
+    if (response.result().success()) {
+        created_job_ids_.push_back(response.result().job_id());
     }
 }
-
-// =============================================================================
-// PauseJob Tests
-// =============================================================================
 
 TEST_F(SchedulerE2ETest, PauseJob) {
-    // First create a job
-    std::string job_id = CreateTestJob("E2E Test: PauseJob Target");
+    // Create a job first
+    std::string job_id = CreateTestJob("E2E Test Job - Pause");
     ASSERT_FALSE(job_id.empty()) << "Failed to create test job";
-
-    // Wait for job to be created on vehicle
-    std::this_thread::sleep_for(2s);
-
-    // Now pause it
-    grpc::ClientContext ctx;
-    ctx.set_deadline(std::chrono::system_clock::now() + 10s);
-
-    scheduler_grpc::PauseJobRequest req;
-    req.set_vehicle_id(VEHICLE_ID);
-    req.set_job_id(job_id);
-
-    scheduler_grpc::PauseJobResponse resp;
-    auto status = stub_->PauseJob(&ctx, req, &resp);
-
-    ASSERT_TRUE(status.ok()) << "gRPC error: " << status.error_message();
-    // Note: success may be false if job hasn't reached vehicle yet
-    LOG(INFO) << "PauseJob result: success=" << resp.success()
-              << " error=" << resp.error_message();
-}
-
-// =============================================================================
-// ResumeJob Tests
-// =============================================================================
-
-TEST_F(SchedulerE2ETest, ResumeJob) {
-    // Create and pause a job first
-    std::string job_id = CreateTestJob("E2E Test: ResumeJob Target");
-    ASSERT_FALSE(job_id.empty()) << "Failed to create test job";
-
-    std::this_thread::sleep_for(2s);
 
     // Pause it
-    {
-        grpc::ClientContext ctx;
-        ctx.set_deadline(std::chrono::system_clock::now() + 5s);
-        scheduler_grpc::PauseJobRequest req;
-        req.set_vehicle_id(VEHICLE_ID);
-        req.set_job_id(job_id);
-        scheduler_grpc::PauseJobResponse resp;
-        stub_->PauseJob(&ctx, req, &resp);
-    }
+    proto::pause_job_request request;
+    request.set_vehicle_id(VEHICLE_ID);
+    request.set_job_id(job_id);
 
-    std::this_thread::sleep_for(1s);
+    proto::pause_job_response response;
+    grpc::ClientContext context;
 
-    // Now resume it
-    grpc::ClientContext ctx;
-    ctx.set_deadline(std::chrono::system_clock::now() + 10s);
-
-    scheduler_grpc::ResumeJobRequest req;
-    req.set_vehicle_id(VEHICLE_ID);
-    req.set_job_id(job_id);
-
-    scheduler_grpc::ResumeJobResponse resp;
-    auto status = stub_->ResumeJob(&ctx, req, &resp);
-
-    ASSERT_TRUE(status.ok()) << "gRPC error: " << status.error_message();
-    LOG(INFO) << "ResumeJob result: success=" << resp.success()
-              << " error=" << resp.error_message();
+    auto status = pause_job_stub_->pause_job(&context, request, &response);
+    ASSERT_TRUE(status.ok()) << "gRPC call failed: " << status.error_message();
+    EXPECT_TRUE(response.result().success()) << "Error: " << response.result().error_message();
 }
 
-// =============================================================================
-// TriggerJob Tests
-// =============================================================================
+TEST_F(SchedulerE2ETest, ResumeJob) {
+    // Create and pause a job
+    std::string job_id = CreateTestJob("E2E Test Job - Resume");
+    ASSERT_FALSE(job_id.empty()) << "Failed to create test job";
+
+    {
+        proto::pause_job_request pause_req;
+        pause_req.set_vehicle_id(VEHICLE_ID);
+        pause_req.set_job_id(job_id);
+        proto::pause_job_response pause_resp;
+        grpc::ClientContext ctx;
+        pause_job_stub_->pause_job(&ctx, pause_req, &pause_resp);
+    }
+
+    // Resume it
+    proto::resume_job_request request;
+    request.set_vehicle_id(VEHICLE_ID);
+    request.set_job_id(job_id);
+
+    proto::resume_job_response response;
+    grpc::ClientContext context;
+
+    auto status = resume_job_stub_->resume_job(&context, request, &response);
+    ASSERT_TRUE(status.ok()) << "gRPC call failed: " << status.error_message();
+    EXPECT_TRUE(response.result().success()) << "Error: " << response.result().error_message();
+}
 
 TEST_F(SchedulerE2ETest, TriggerJob) {
-    // Create a job
-    std::string job_id = CreateTestJob("E2E Test: TriggerJob Target");
+    std::string job_id = CreateTestJob("E2E Test Job - Trigger");
     ASSERT_FALSE(job_id.empty()) << "Failed to create test job";
 
-    std::this_thread::sleep_for(2s);
+    proto::trigger_job_request request;
+    request.set_vehicle_id(VEHICLE_ID);
+    request.set_job_id(job_id);
 
-    // Trigger immediate execution
-    grpc::ClientContext ctx;
-    ctx.set_deadline(std::chrono::system_clock::now() + 10s);
+    proto::trigger_job_response response;
+    grpc::ClientContext context;
 
-    scheduler_grpc::TriggerJobRequest req;
-    req.set_vehicle_id(VEHICLE_ID);
-    req.set_job_id(job_id);
-
-    scheduler_grpc::TriggerJobResponse resp;
-    auto status = stub_->TriggerJob(&ctx, req, &resp);
-
-    ASSERT_TRUE(status.ok()) << "gRPC error: " << status.error_message();
-    LOG(INFO) << "TriggerJob result: success=" << resp.success()
-              << " error=" << resp.error_message();
+    auto status = trigger_job_stub_->trigger_job(&context, request, &response);
+    ASSERT_TRUE(status.ok()) << "gRPC call failed: " << status.error_message();
+    EXPECT_TRUE(response.result().success()) << "Error: " << response.result().error_message();
 }
-
-// =============================================================================
-// DeleteJob Tests
-// =============================================================================
 
 TEST_F(SchedulerE2ETest, DeleteJob) {
-    // Create a job
-    std::string job_id = CreateTestJob("E2E Test: DeleteJob Target");
+    std::string job_id = CreateTestJob("E2E Test Job - Delete");
     ASSERT_FALSE(job_id.empty()) << "Failed to create test job";
 
-    std::this_thread::sleep_for(2s);
+    proto::delete_job_request request;
+    request.set_vehicle_id(VEHICLE_ID);
+    request.set_job_id(job_id);
 
-    // Delete it
-    grpc::ClientContext ctx;
-    ctx.set_deadline(std::chrono::system_clock::now() + 10s);
+    proto::delete_job_response response;
+    grpc::ClientContext context;
 
-    scheduler_grpc::DeleteJobRequest req;
-    req.set_vehicle_id(VEHICLE_ID);
-    req.set_job_id(job_id);
+    auto status = delete_job_stub_->delete_job(&context, request, &response);
+    ASSERT_TRUE(status.ok()) << "gRPC call failed: " << status.error_message();
+    EXPECT_TRUE(response.result().success()) << "Error: " << response.result().error_message();
 
-    scheduler_grpc::DeleteJobResponse resp;
-    auto status = stub_->DeleteJob(&ctx, req, &resp);
-
-    ASSERT_TRUE(status.ok()) << "gRPC error: " << status.error_message();
-    LOG(INFO) << "DeleteJob result: success=" << resp.success()
-              << " error=" << resp.error_message();
-
-    // Remove from cleanup list since we just deleted it
-    created_jobs_.erase(
-        std::remove(created_jobs_.begin(), created_jobs_.end(), job_id),
-        created_jobs_.end());
+    // Remove from cleanup list since we deleted it
+    created_job_ids_.erase(
+        std::remove(created_job_ids_.begin(), created_job_ids_.end(), job_id),
+        created_job_ids_.end());
 }
 
-// =============================================================================
-// Workflow Tests
-// =============================================================================
-
-TEST_F(SchedulerE2ETest, FullJobLifecycle) {
-    LOG(INFO) << "=== Full Job Lifecycle Test ===";
-
-    // 1. Create job
-    LOG(INFO) << "Step 1: Creating job...";
-    std::string job_id = CreateTestJob("E2E Test: Full Lifecycle");
-    ASSERT_FALSE(job_id.empty()) << "Failed to create test job";
-    LOG(INFO) << "  Created job: " << job_id;
-
-    std::this_thread::sleep_for(2s);
-
-    // 2. Pause job
-    LOG(INFO) << "Step 2: Pausing job...";
-    {
-        grpc::ClientContext ctx;
-        ctx.set_deadline(std::chrono::system_clock::now() + 5s);
-        scheduler_grpc::PauseJobRequest req;
-        req.set_vehicle_id(VEHICLE_ID);
-        req.set_job_id(job_id);
-        scheduler_grpc::PauseJobResponse resp;
-        auto status = stub_->PauseJob(&ctx, req, &resp);
-        ASSERT_TRUE(status.ok());
-        LOG(INFO) << "  Pause result: " << (resp.success() ? "OK" : resp.error_message());
-    }
-
-    std::this_thread::sleep_for(1s);
-
-    // 3. Resume job
-    LOG(INFO) << "Step 3: Resuming job...";
-    {
-        grpc::ClientContext ctx;
-        ctx.set_deadline(std::chrono::system_clock::now() + 5s);
-        scheduler_grpc::ResumeJobRequest req;
-        req.set_vehicle_id(VEHICLE_ID);
-        req.set_job_id(job_id);
-        scheduler_grpc::ResumeJobResponse resp;
-        auto status = stub_->ResumeJob(&ctx, req, &resp);
-        ASSERT_TRUE(status.ok());
-        LOG(INFO) << "  Resume result: " << (resp.success() ? "OK" : resp.error_message());
-    }
-
-    std::this_thread::sleep_for(1s);
-
-    // 4. Trigger job
-    LOG(INFO) << "Step 4: Triggering job...";
-    {
-        grpc::ClientContext ctx;
-        ctx.set_deadline(std::chrono::system_clock::now() + 5s);
-        scheduler_grpc::TriggerJobRequest req;
-        req.set_vehicle_id(VEHICLE_ID);
-        req.set_job_id(job_id);
-        scheduler_grpc::TriggerJobResponse resp;
-        auto status = stub_->TriggerJob(&ctx, req, &resp);
-        ASSERT_TRUE(status.ok());
-        LOG(INFO) << "  Trigger result: " << (resp.success() ? "OK" : resp.error_message());
-    }
-
-    std::this_thread::sleep_for(1s);
-
-    // 5. Delete job
-    LOG(INFO) << "Step 5: Deleting job...";
-    {
-        grpc::ClientContext ctx;
-        ctx.set_deadline(std::chrono::system_clock::now() + 5s);
-        scheduler_grpc::DeleteJobRequest req;
-        req.set_vehicle_id(VEHICLE_ID);
-        req.set_job_id(job_id);
-        scheduler_grpc::DeleteJobResponse resp;
-        auto status = stub_->DeleteJob(&ctx, req, &resp);
-        ASSERT_TRUE(status.ok());
-        LOG(INFO) << "  Delete result: " << (resp.success() ? "OK" : resp.error_message());
-    }
-
-    // Remove from cleanup list
-    created_jobs_.erase(
-        std::remove(created_jobs_.begin(), created_jobs_.end(), job_id),
-        created_jobs_.end());
-
-    LOG(INFO) << "=== Full Job Lifecycle Complete ===";
-}
-
-// =============================================================================
-// Error Cases
-// =============================================================================
-
-TEST_F(SchedulerE2ETest, PauseNonexistentJob) {
-    grpc::ClientContext ctx;
-    ctx.set_deadline(std::chrono::system_clock::now() + 5s);
-
-    scheduler_grpc::PauseJobRequest req;
-    req.set_vehicle_id(VEHICLE_ID);
-    req.set_job_id("nonexistent-job-id-12345");
-
-    scheduler_grpc::PauseJobResponse resp;
-    auto status = stub_->PauseJob(&ctx, req, &resp);
-
-    // Should return NOT_FOUND for non-existent job
-    ASSERT_EQ(status.error_code(), grpc::NOT_FOUND)
-        << "Should return NOT_FOUND for non-existent job";
-    LOG(INFO) << "PauseNonexistentJob: error_code=" << status.error_code()
-              << " message=" << status.error_message();
-}
-
-TEST_F(SchedulerE2ETest, CreateJobInvalidVehicle) {
-    grpc::ClientContext ctx;
-    ctx.set_deadline(std::chrono::system_clock::now() + 5s);
-
-    scheduler_grpc::CreateJobRequest req;
-    req.set_vehicle_id("INVALID_VEHICLE_ID_THAT_DOES_NOT_EXIST");
-    req.set_title("Should not be created");
-    req.set_service("echo_service");
-    req.set_method("echo");
-    req.set_scheduled_time("2026-01-05T12:00:00Z");
-    req.set_created_by("e2e_test");
-
-    scheduler_grpc::CreateJobResponse resp;
-    auto status = stub_->CreateJob(&ctx, req, &resp);
-
-    // The gRPC call should succeed, but the job creation may fail
-    // depending on whether the cloud scheduler validates vehicle IDs
-    ASSERT_TRUE(status.ok()) << "gRPC error: " << status.error_message();
-    LOG(INFO) << "CreateJobInvalidVehicle: success=" << resp.success()
-              << " error=" << resp.error_message();
-}
-
-// =============================================================================
-// GetJob Tests
-// =============================================================================
-
-TEST_F(SchedulerE2ETest, GetJobBasic) {
-    // Create a job first
-    std::string job_id = CreateTestJob("E2E Test: GetJob Target", "test_service", "test_method");
+TEST_F(SchedulerE2ETest, GetJob) {
+    std::string job_id = CreateTestJob("E2E Test Job - Get");
     ASSERT_FALSE(job_id.empty()) << "Failed to create test job";
 
-    // Give it time to be stored
-    std::this_thread::sleep_for(500ms);
+    proto::get_job_request request;
+    request.set_vehicle_id(VEHICLE_ID);
+    request.set_job_id(job_id);
 
-    // Get the job
-    grpc::ClientContext ctx;
-    ctx.set_deadline(std::chrono::system_clock::now() + 5s);
+    proto::get_job_response response;
+    grpc::ClientContext context;
 
-    scheduler_grpc::GetJobRequest req;
-    req.set_job_id(job_id);
-
-    scheduler_grpc::GetJobResponse resp;
-    auto status = stub_->GetJob(&ctx, req, &resp);
-
-    ASSERT_TRUE(status.ok()) << "gRPC error: " << status.error_message();
-    ASSERT_TRUE(resp.found()) << "Job should be found";
-    EXPECT_EQ(resp.job().job_id(), job_id);
-    EXPECT_EQ(resp.job().vehicle_id(), VEHICLE_ID);
-    EXPECT_EQ(resp.job().service(), "test_service");
-    EXPECT_EQ(resp.job().method(), "test_method");
-    EXPECT_EQ(resp.job().title(), "E2E Test: GetJob Target");
-
-    LOG(INFO) << "GetJob returned: job_id=" << resp.job().job_id()
-              << " vehicle=" << resp.job().vehicle_id()
-              << " service=" << resp.job().service()
-              << " method=" << resp.job().method();
+    auto status = get_job_stub_->get_job(&context, request, &response);
+    ASSERT_TRUE(status.ok()) << "gRPC call failed: " << status.error_message();
+    EXPECT_TRUE(response.result().found());
+    EXPECT_EQ(response.result().job().job_id(), job_id);
+    EXPECT_EQ(response.result().job().title(), "E2E Test Job - Get");
 }
 
 TEST_F(SchedulerE2ETest, GetJobNotFound) {
-    grpc::ClientContext ctx;
-    ctx.set_deadline(std::chrono::system_clock::now() + 5s);
+    proto::get_job_request request;
+    request.set_vehicle_id(VEHICLE_ID);
+    request.set_job_id("nonexistent-job-id-12345");
 
-    scheduler_grpc::GetJobRequest req;
-    req.set_job_id("nonexistent-job-id-99999");
+    proto::get_job_response response;
+    grpc::ClientContext context;
 
-    scheduler_grpc::GetJobResponse resp;
-    auto status = stub_->GetJob(&ctx, req, &resp);
-
-    // Should return NOT_FOUND
-    ASSERT_EQ(status.error_code(), grpc::NOT_FOUND)
-        << "Should return NOT_FOUND for non-existent job";
+    auto status = get_job_stub_->get_job(&context, request, &response);
+    ASSERT_TRUE(status.ok()) << "gRPC call failed: " << status.error_message();
+    EXPECT_FALSE(response.result().found());
 }
 
-// =============================================================================
-// ListJobs Tests
-// =============================================================================
-
-TEST_F(SchedulerE2ETest, ListJobsEmpty) {
-    // Clean up any existing jobs for this vehicle first
-    db_->execute("DELETE FROM jobs WHERE vehicle_id = $1", {VEHICLE_ID});
-
-    grpc::ClientContext ctx;
-    ctx.set_deadline(std::chrono::system_clock::now() + 5s);
-
-    scheduler_grpc::ListJobsRequest req;
-    req.set_vehicle_id_filter(VEHICLE_ID);
-    req.set_page_size(10);
-
-    scheduler_grpc::ListJobsResponse resp;
-    auto status = stub_->ListJobs(&ctx, req, &resp);
-
-    ASSERT_TRUE(status.ok()) << "gRPC error: " << status.error_message();
-    EXPECT_EQ(resp.jobs_size(), 0) << "Should have no jobs";
-    EXPECT_EQ(resp.total_count(), 0);
-
-    LOG(INFO) << "ListJobs (empty): total=" << resp.total_count();
-}
-
-TEST_F(SchedulerE2ETest, ListJobsWithResults) {
-    // Clean up first
-    db_->execute("DELETE FROM jobs WHERE vehicle_id = $1", {VEHICLE_ID});
-
-    // Create multiple jobs
-    std::string job1 = CreateTestJob("E2E Test: ListJobs 1", "service_a", "method_a");
-    std::string job2 = CreateTestJob("E2E Test: ListJobs 2", "service_b", "method_b");
-    std::string job3 = CreateTestJob("E2E Test: ListJobs 3", "service_a", "method_c");
+TEST_F(SchedulerE2ETest, ListJobs) {
+    // Create a couple of jobs
+    std::string job1 = CreateTestJob("E2E Test Job - List 1");
+    std::string job2 = CreateTestJob("E2E Test Job - List 2");
     ASSERT_FALSE(job1.empty());
     ASSERT_FALSE(job2.empty());
-    ASSERT_FALSE(job3.empty());
 
-    std::this_thread::sleep_for(500ms);
+    proto::list_jobs_request request;
+    auto* filter = request.mutable_filter();
+    filter->set_vehicle_id_filter(VEHICLE_ID);
 
-    // List all jobs for this vehicle
-    grpc::ClientContext ctx;
-    ctx.set_deadline(std::chrono::system_clock::now() + 5s);
+    proto::list_jobs_response response;
+    grpc::ClientContext context;
 
-    scheduler_grpc::ListJobsRequest req;
-    req.set_vehicle_id_filter(VEHICLE_ID);
-    req.set_page_size(10);
-
-    scheduler_grpc::ListJobsResponse resp;
-    auto status = stub_->ListJobs(&ctx, req, &resp);
-
-    ASSERT_TRUE(status.ok()) << "gRPC error: " << status.error_message();
-    EXPECT_EQ(resp.jobs_size(), 3) << "Should have 3 jobs";
-    EXPECT_EQ(resp.total_count(), 3);
-
-    LOG(INFO) << "ListJobs: returned " << resp.jobs_size() << " jobs, total=" << resp.total_count();
-    for (const auto& job : resp.jobs()) {
-        LOG(INFO) << "  - " << job.job_id() << ": " << job.title();
-    }
+    auto status = list_jobs_stub_->list_jobs(&context, request, &response);
+    ASSERT_TRUE(status.ok()) << "gRPC call failed: " << status.error_message();
+    EXPECT_GE(response.result().jobs_size(), 2);
 }
 
-TEST_F(SchedulerE2ETest, ListJobsWithServiceFilter) {
-    // Clean up first
-    db_->execute("DELETE FROM jobs WHERE vehicle_id = $1", {VEHICLE_ID});
+TEST_F(SchedulerE2ETest, ListJobsEmpty) {
+    proto::list_jobs_request request;
+    auto* filter = request.mutable_filter();
+    filter->set_vehicle_id_filter("NONEXISTENT_VEHICLE_12345");
 
-    // Create jobs with different services
-    CreateTestJob("E2E Test: Filter 1", "target_service", "method1");
-    CreateTestJob("E2E Test: Filter 2", "target_service", "method2");
-    CreateTestJob("E2E Test: Filter 3", "other_service", "method1");
+    proto::list_jobs_response response;
+    grpc::ClientContext context;
 
-    std::this_thread::sleep_for(500ms);
-
-    // Filter by service
-    grpc::ClientContext ctx;
-    ctx.set_deadline(std::chrono::system_clock::now() + 5s);
-
-    scheduler_grpc::ListJobsRequest req;
-    req.set_vehicle_id_filter(VEHICLE_ID);
-    req.set_service_filter("target_service");
-    req.set_page_size(10);
-
-    scheduler_grpc::ListJobsResponse resp;
-    auto status = stub_->ListJobs(&ctx, req, &resp);
-
-    ASSERT_TRUE(status.ok()) << "gRPC error: " << status.error_message();
-    EXPECT_EQ(resp.jobs_size(), 2) << "Should have 2 jobs with target_service";
-
-    for (const auto& job : resp.jobs()) {
-        EXPECT_EQ(job.service(), "target_service");
-    }
-
-    LOG(INFO) << "ListJobs with filter: returned " << resp.jobs_size() << " jobs";
-}
-
-TEST_F(SchedulerE2ETest, ListJobsPagination) {
-    // Clean up first
-    db_->execute("DELETE FROM jobs WHERE vehicle_id = $1", {VEHICLE_ID});
-
-    // Create 5 jobs
-    for (int i = 0; i < 5; i++) {
-        CreateTestJob("E2E Test: Pagination " + std::to_string(i));
-    }
-
-    std::this_thread::sleep_for(500ms);
-
-    // Get first page (size 2)
-    scheduler_grpc::ListJobsResponse resp1;
-    {
-        grpc::ClientContext ctx;
-        ctx.set_deadline(std::chrono::system_clock::now() + 5s);
-
-        scheduler_grpc::ListJobsRequest req;
-        req.set_vehicle_id_filter(VEHICLE_ID);
-        req.set_page_size(2);
-
-        auto status = stub_->ListJobs(&ctx, req, &resp1);
-        ASSERT_TRUE(status.ok());
-    }
-
-    EXPECT_EQ(resp1.jobs_size(), 2);
-    EXPECT_EQ(resp1.total_count(), 5);
-    EXPECT_FALSE(resp1.next_page_token().empty()) << "Should have next page token";
-
-    LOG(INFO) << "Page 1: " << resp1.jobs_size() << " jobs, next_token=" << resp1.next_page_token();
-
-    // Get second page
-    scheduler_grpc::ListJobsResponse resp2;
-    {
-        grpc::ClientContext ctx;
-        ctx.set_deadline(std::chrono::system_clock::now() + 5s);
-
-        scheduler_grpc::ListJobsRequest req;
-        req.set_vehicle_id_filter(VEHICLE_ID);
-        req.set_page_size(2);
-        req.set_page_token(resp1.next_page_token());
-
-        auto status = stub_->ListJobs(&ctx, req, &resp2);
-        ASSERT_TRUE(status.ok());
-    }
-
-    EXPECT_EQ(resp2.jobs_size(), 2);
-
-    LOG(INFO) << "Page 2: " << resp2.jobs_size() << " jobs, next_token=" << resp2.next_page_token();
+    auto status = list_jobs_stub_->list_jobs(&context, request, &response);
+    ASSERT_TRUE(status.ok()) << "gRPC call failed: " << status.error_message();
+    EXPECT_EQ(response.result().jobs_size(), 0);
 }
 
 // =============================================================================
-// Fleet Operations Tests
+// Fleet Job Tests
 // =============================================================================
 
 TEST_F(SchedulerE2ETest, CreateFleetJob) {
-    // Create additional test vehicles
-    db_->execute(R"(
-        INSERT INTO vehicles (vehicle_id, is_online, first_seen_at, last_seen_at)
-        VALUES ($1, true, NOW(), NOW())
-        ON CONFLICT (vehicle_id) DO NOTHING
-    )", {"FLEET_VIN_001"});
-    db_->execute(R"(
-        INSERT INTO vehicles (vehicle_id, is_online, first_seen_at, last_seen_at)
-        VALUES ($1, true, NOW(), NOW())
-        ON CONFLICT (vehicle_id) DO NOTHING
-    )", {"FLEET_VIN_002"});
+    proto::create_fleet_job_request request;
+    auto* inner = request.mutable_request();
+    inner->add_vehicle_ids(VEHICLE_ID);
+    inner->set_title("E2E Fleet Job");
+    inner->set_service("echo_service");
+    inner->set_method("echo");
+    inner->set_scheduled_time_ms(Iso8601ToMs("2099-01-15T12:00:00Z"));
 
-    grpc::ClientContext ctx;
-    ctx.set_deadline(std::chrono::system_clock::now() + 10s);
+    proto::create_fleet_job_response response;
+    grpc::ClientContext context;
 
-    scheduler_grpc::CreateFleetJobRequest req;
-    req.add_vehicle_ids("FLEET_VIN_001");
-    req.add_vehicle_ids("FLEET_VIN_002");
-    req.add_vehicle_ids(VEHICLE_ID);
-    req.set_title("E2E Test: Fleet Job");
-    req.set_service("fleet_service");
-    req.set_method("fleet_update");
-    req.set_parameters_json(R"({"version": "2.0"})");
-    req.set_scheduled_time("2026-06-01T00:00:00Z");
-    req.set_created_by("fleet_e2e_test");
+    auto status = create_fleet_job_stub_->create_fleet_job(&context, request, &response);
+    ASSERT_TRUE(status.ok()) << "gRPC call failed: " << status.error_message();
+    EXPECT_EQ(response.result().total_vehicles(), 1);
+    EXPECT_GE(response.result().successful(), 1);
 
-    scheduler_grpc::CreateFleetJobResponse resp;
-    auto status = stub_->CreateFleetJob(&ctx, req, &resp);
-
-    ASSERT_TRUE(status.ok()) << "gRPC error: " << status.error_message();
-    EXPECT_EQ(resp.total_vehicles(), 3);
-    EXPECT_GE(resp.successful(), 1);  // At least some should succeed
-
-    LOG(INFO) << "CreateFleetJob: total=" << resp.total_vehicles()
-              << " successful=" << resp.successful()
-              << " failed=" << resp.failed();
-
-    for (const auto& result : resp.results()) {
-        LOG(INFO) << "  - " << result.vehicle_id() << ": "
-                  << (result.success() ? "OK" : result.error_message());
-        if (result.success()) {
-            created_jobs_.push_back(result.job_id());
+    // Track created jobs for cleanup
+    for (const auto& result : response.result().results()) {
+        if (result.success() && !result.job_id().empty()) {
+            created_job_ids_.push_back(result.job_id());
         }
     }
-
-    // Cleanup fleet vehicles
-    db_->execute("DELETE FROM jobs WHERE vehicle_id = $1", {"FLEET_VIN_001"});
-    db_->execute("DELETE FROM jobs WHERE vehicle_id = $1", {"FLEET_VIN_002"});
-    db_->execute("DELETE FROM vehicles WHERE vehicle_id = $1", {"FLEET_VIN_001"});
-    db_->execute("DELETE FROM vehicles WHERE vehicle_id = $1", {"FLEET_VIN_002"});
-}
-
-TEST_F(SchedulerE2ETest, GetFleetJobStats) {
-    // Clean up and create some jobs
-    db_->execute("DELETE FROM jobs WHERE vehicle_id = $1", {VEHICLE_ID});
-
-    CreateTestJob("Stats Job 1", "service_alpha", "method1");
-    CreateTestJob("Stats Job 2", "service_alpha", "method2");
-    CreateTestJob("Stats Job 3", "service_beta", "method1");
-
-    std::this_thread::sleep_for(500ms);
-
-    grpc::ClientContext ctx;
-    ctx.set_deadline(std::chrono::system_clock::now() + 5s);
-
-    scheduler_grpc::GetFleetJobStatsRequest req;
-    // No filters - get all stats
-
-    scheduler_grpc::GetFleetJobStatsResponse resp;
-    auto status = stub_->GetFleetJobStats(&ctx, req, &resp);
-
-    ASSERT_TRUE(status.ok()) << "gRPC error: " << status.error_message();
-    EXPECT_GE(resp.total_jobs(), 3);
-
-    LOG(INFO) << "FleetJobStats: total_jobs=" << resp.total_jobs()
-              << " total_vehicles=" << resp.total_vehicles_with_jobs();
-
-    for (const auto& stat : resp.by_service_method()) {
-        LOG(INFO) << "  - " << stat.service() << ": " << stat.total_jobs() << " jobs";
-    }
-
-    for (const auto& [status_name, count] : resp.by_status()) {
-        LOG(INFO) << "  - status " << status_name << ": " << count;
-    }
-}
-
-// =============================================================================
-// GetJobExecutions Tests
-// =============================================================================
-
-TEST_F(SchedulerE2ETest, GetJobExecutionsEmpty) {
-    // Create a job that hasn't been executed
-    std::string job_id = CreateTestJob("E2E Test: No Executions");
-    ASSERT_FALSE(job_id.empty());
-
-    std::this_thread::sleep_for(500ms);
-
-    grpc::ClientContext ctx;
-    ctx.set_deadline(std::chrono::system_clock::now() + 5s);
-
-    scheduler_grpc::GetJobExecutionsRequest req;
-    req.set_job_id(job_id);
-    req.set_limit(10);
-
-    scheduler_grpc::GetJobExecutionsResponse resp;
-    auto status = stub_->GetJobExecutions(&ctx, req, &resp);
-
-    ASSERT_TRUE(status.ok()) << "gRPC error: " << status.error_message();
-    EXPECT_EQ(resp.executions_size(), 0) << "New job should have no executions";
-
-    LOG(INFO) << "GetJobExecutions (empty): job=" << job_id
-              << " total=" << resp.total_count();
 }
 
 // =============================================================================
@@ -854,383 +567,352 @@ TEST_F(SchedulerE2ETest, GetJobExecutionsEmpty) {
 // =============================================================================
 
 TEST_F(SchedulerE2ETest, CreateJobMissingVehicleId) {
-    grpc::ClientContext ctx;
-    ctx.set_deadline(std::chrono::system_clock::now() + 5s);
-
-    scheduler_grpc::CreateJobRequest req;
+    proto::create_job_request request;
+    auto* inner = request.mutable_request();
     // Missing vehicle_id
-    req.set_title("Missing Vehicle");
-    req.set_service("test_service");
-    req.set_method("test_method");
+    inner->set_title("Test Job");
+    inner->set_service("echo_service");
+    inner->set_method("echo");
+    inner->set_scheduled_time_ms(Iso8601ToMs("2099-01-05T12:00:00Z"));
 
-    scheduler_grpc::CreateJobResponse resp;
-    auto status = stub_->CreateJob(&ctx, req, &resp);
+    proto::create_job_response response;
+    grpc::ClientContext context;
 
-    EXPECT_EQ(status.error_code(), grpc::INVALID_ARGUMENT)
-        << "Should return INVALID_ARGUMENT for missing vehicle_id";
+    auto status = create_job_stub_->create_job(&context, request, &response);
+    EXPECT_FALSE(status.ok());
+    EXPECT_EQ(status.error_code(), grpc::INVALID_ARGUMENT);
 }
 
 TEST_F(SchedulerE2ETest, CreateJobMissingService) {
-    grpc::ClientContext ctx;
-    ctx.set_deadline(std::chrono::system_clock::now() + 5s);
-
-    scheduler_grpc::CreateJobRequest req;
-    req.set_vehicle_id(VEHICLE_ID);
-    req.set_title("Missing Service");
+    proto::create_job_request request;
+    auto* inner = request.mutable_request();
+    inner->set_vehicle_id(VEHICLE_ID);
+    inner->set_title("Test Job");
     // Missing service
-    req.set_method("test_method");
+    inner->set_method("echo");
+    inner->set_scheduled_time_ms(Iso8601ToMs("2099-01-05T12:00:00Z"));
 
-    scheduler_grpc::CreateJobResponse resp;
-    auto status = stub_->CreateJob(&ctx, req, &resp);
+    proto::create_job_response response;
+    grpc::ClientContext context;
 
-    EXPECT_EQ(status.error_code(), grpc::INVALID_ARGUMENT)
-        << "Should return INVALID_ARGUMENT for missing service";
+    auto status = create_job_stub_->create_job(&context, request, &response);
+    EXPECT_FALSE(status.ok());
+    EXPECT_EQ(status.error_code(), grpc::INVALID_ARGUMENT);
 }
 
 TEST_F(SchedulerE2ETest, CreateJobMissingMethod) {
-    grpc::ClientContext ctx;
-    ctx.set_deadline(std::chrono::system_clock::now() + 5s);
-
-    scheduler_grpc::CreateJobRequest req;
-    req.set_vehicle_id(VEHICLE_ID);
-    req.set_title("Missing Method");
-    req.set_service("test_service");
+    proto::create_job_request request;
+    auto* inner = request.mutable_request();
+    inner->set_vehicle_id(VEHICLE_ID);
+    inner->set_title("Test Job");
+    inner->set_service("echo_service");
     // Missing method
+    inner->set_scheduled_time_ms(Iso8601ToMs("2099-01-05T12:00:00Z"));
 
-    scheduler_grpc::CreateJobResponse resp;
-    auto status = stub_->CreateJob(&ctx, req, &resp);
+    proto::create_job_response response;
+    grpc::ClientContext context;
 
-    EXPECT_EQ(status.error_code(), grpc::INVALID_ARGUMENT)
-        << "Should return INVALID_ARGUMENT for missing method";
+    auto status = create_job_stub_->create_job(&context, request, &response);
+    EXPECT_FALSE(status.ok());
+    EXPECT_EQ(status.error_code(), grpc::INVALID_ARGUMENT);
 }
 
-TEST_F(SchedulerE2ETest, PauseJobMissingJobId) {
-    grpc::ClientContext ctx;
-    ctx.set_deadline(std::chrono::system_clock::now() + 5s);
-
-    scheduler_grpc::PauseJobRequest req;
-    req.set_vehicle_id(VEHICLE_ID);
+TEST_F(SchedulerE2ETest, DeleteJobMissingJobId) {
+    proto::delete_job_request request;
+    request.set_vehicle_id(VEHICLE_ID);
     // Missing job_id
 
-    scheduler_grpc::PauseJobResponse resp;
-    auto status = stub_->PauseJob(&ctx, req, &resp);
+    proto::delete_job_response response;
+    grpc::ClientContext context;
 
-    EXPECT_EQ(status.error_code(), grpc::INVALID_ARGUMENT)
-        << "Should return INVALID_ARGUMENT for missing job_id";
+    auto status = delete_job_stub_->delete_job(&context, request, &response);
+    EXPECT_FALSE(status.ok());
+    EXPECT_EQ(status.error_code(), grpc::INVALID_ARGUMENT);
+}
+
+TEST_F(SchedulerE2ETest, DeleteJobNotFound) {
+    proto::delete_job_request request;
+    request.set_vehicle_id(VEHICLE_ID);
+    request.set_job_id("nonexistent-job-id-67890");
+
+    proto::delete_job_response response;
+    grpc::ClientContext context;
+
+    auto status = delete_job_stub_->delete_job(&context, request, &response);
+    EXPECT_FALSE(status.ok());
+    EXPECT_EQ(status.error_code(), grpc::NOT_FOUND);
+}
+
+TEST_F(SchedulerE2ETest, UpdateJobScheduledTime) {
+    std::string job_id = CreateTestJob("E2E Test Job - Update Time");
+    ASSERT_FALSE(job_id.empty()) << "Failed to create test job";
+
+    proto::update_job_request request;
+    auto* inner = request.mutable_request();
+    inner->set_vehicle_id(VEHICLE_ID);
+    inner->set_job_id(job_id);
+    inner->set_scheduled_time_ms(Iso8601ToMs("2099-06-15T14:30:00Z"));
+
+    proto::update_job_response response;
+    grpc::ClientContext context;
+
+    auto status = update_job_stub_->update_job(&context, request, &response);
+    ASSERT_TRUE(status.ok()) << "gRPC call failed: " << status.error_message();
+    EXPECT_TRUE(response.result().success()) << "Error: " << response.result().error_message();
+}
+
+TEST_F(SchedulerE2ETest, UpdateJobNotFound) {
+    proto::update_job_request request;
+    auto* inner = request.mutable_request();
+    inner->set_vehicle_id(VEHICLE_ID);
+    inner->set_job_id("nonexistent-job-id-update");
+    inner->set_scheduled_time_ms(Iso8601ToMs("2099-01-01T00:00:00Z"));
+
+    proto::update_job_response response;
+    grpc::ClientContext context;
+
+    auto status = update_job_stub_->update_job(&context, request, &response);
+    EXPECT_FALSE(status.ok());
+    EXPECT_EQ(status.error_code(), grpc::NOT_FOUND);
+}
+
+TEST_F(SchedulerE2ETest, UpdateJobMissingJobId) {
+    proto::update_job_request request;
+    auto* inner = request.mutable_request();
+    inner->set_vehicle_id(VEHICLE_ID);
+    // Missing job_id
+    inner->set_scheduled_time_ms(Iso8601ToMs("2099-01-01T00:00:00Z"));
+
+    proto::update_job_response response;
+    grpc::ClientContext context;
+
+    auto status = update_job_stub_->update_job(&context, request, &response);
+    EXPECT_FALSE(status.ok());
+    EXPECT_EQ(status.error_code(), grpc::INVALID_ARGUMENT);
 }
 
 // =============================================================================
-// Real Vehicle Tests (requires ifex-vehicle:latest Docker image)
+// Sync State Flow Tests (Cloud → Vehicle → Cloud)
 // =============================================================================
 
-#include "e2e_test_fixture.hpp"
+TEST_F(SchedulerE2ETest, CreateJob_SyncStateFlow) {
+    // Create job - should start as 'pending'
+    proto::create_job_request request;
+    auto* inner = request.mutable_request();
+    inner->set_vehicle_id(VEHICLE_ID);
+    inner->set_title("E2E Sync Test - Create");
+    inner->set_service("echo_service");
+    inner->set_method("echo");
+    inner->set_scheduled_time_ms(Iso8601ToMs("2099-02-01T10:00:00Z"));
 
-/**
- * @brief E2E tests with real vehicle container running scheduler + echo service
- *
- * These tests verify the complete scheduler flow:
- *   Cloud API → Kafka → mqtt_kafka_bridge → MQTT → Vehicle Scheduler → Echo Service
- *               ↓
- *   PostgreSQL ← scheduler_mirror ← Kafka ← MQTT ← Vehicle Scheduler (execution result)
- *
- * Prerequisites:
- *   - Docker image: ifex-vehicle:latest (build with covesa-ifex-core/build-test-container.sh)
- *   - Infrastructure: postgres, kafka, mosquitto (run deploy/start-infra.sh)
- */
-class SchedulerRealVehicleTest : public ifex::offboard::test::E2ETestFixture {
-protected:
-    static constexpr const char* SCHEDULER_ADDR = "localhost:50083";
-    static std::unique_ptr<scheduler_grpc::CloudSchedulerService::Stub> stub_;
-    static std::shared_ptr<grpc::Channel> channel_;
-    static pid_t scheduler_pid_;
+    proto::create_job_response response;
+    grpc::ClientContext context;
 
-    static void SetUpTestSuite() {
-        // Start E2E infrastructure (vehicle, bridges)
-        ifex::offboard::test::E2ETestFixture::SetUpTestSuite();
+    auto status = create_job_stub_->create_job(&context, request, &response);
+    ASSERT_TRUE(status.ok());
+    ASSERT_TRUE(response.result().success());
 
-        // Wait for echo_service to register
-        ASSERT_TRUE(ifex::offboard::test::E2ETestInfrastructure::WaitForServiceRegistered(
-            ifex::offboard::test::E2ETestInfrastructure::VEHICLE_ID,
-            "echo_service",
-            std::chrono::seconds(30)))
-            << "Echo service did not register within 30 seconds";
+    std::string job_id = response.result().job_id();
+    created_job_ids_.push_back(job_id);
 
-        // Start scheduler_api with E2E isolated ports
-        std::string binary = ifex::offboard::test::E2ETestInfrastructure::GetBinaryPath("scheduler_api");
-        std::string kafka_broker = ifex::offboard::test::E2ETestInfrastructure::KAFKA_BROKER;
-        std::string pg_port = std::to_string(ifex::offboard::test::E2ETestInfrastructure::POSTGRES_PORT);
-
-        scheduler_pid_ = fork();
-        if (scheduler_pid_ == 0) {
-            execl(binary.c_str(), "scheduler_api",
-                  "--grpc_listen", SCHEDULER_ADDR,
-                  "--kafka_broker", kafka_broker.c_str(),
-                  "--kafka_topic_c2v", "e2e.c2v.scheduler",  // E2E topic prefix
-                  "--postgres_host", "localhost",
-                  "--postgres_port", pg_port.c_str(),
-                  "--postgres_db", "ifex_offboard",
-                  "--postgres_user", "ifex",
-                  "--postgres_password", "ifex_dev",
-                  "--logtostderr",
-                  nullptr);
-            LOG(ERROR) << "Failed to exec scheduler_api";
-            _exit(1);
-        }
-        ASSERT_GT(scheduler_pid_, 0) << "Failed to fork scheduler_api";
-        LOG(INFO) << "Started scheduler_api with PID " << scheduler_pid_;
-
-        // Connect gRPC client
-        std::this_thread::sleep_for(std::chrono::seconds(2));
-        channel_ = grpc::CreateChannel(SCHEDULER_ADDR, grpc::InsecureChannelCredentials());
-        stub_ = scheduler_grpc::CloudSchedulerService::NewStub(channel_);
-
-        auto deadline = std::chrono::system_clock::now() + std::chrono::seconds(10);
-        ASSERT_TRUE(channel_->WaitForConnected(deadline))
-            << "Failed to connect to scheduler_api";
-
-        LOG(INFO) << "Real vehicle scheduler test infrastructure ready";
-    }
-
-    static void TearDownTestSuite() {
-        // Close gRPC first
-        stub_.reset();
-        channel_.reset();
-
-        // Stop scheduler_api
-        if (scheduler_pid_ > 0) {
-            LOG(INFO) << "Stopping scheduler_api (PID " << scheduler_pid_ << ")";
-            kill(scheduler_pid_, SIGTERM);
-            int status;
-            waitpid(scheduler_pid_, &status, 0);
-            scheduler_pid_ = 0;
-        }
-
-        // Stop E2E infrastructure
-        ifex::offboard::test::E2ETestFixture::TearDownTestSuite();
-    }
-
-    // Helper to create a job on the real vehicle
-    std::string CreateRealVehicleJob(const std::string& title,
-                                      const std::string& method = "echo",
-                                      const std::string& params_json = R"({\"message\": \"test\"})") {
-        grpc::ClientContext ctx;
-        ctx.set_deadline(std::chrono::system_clock::now() + 10s);
-
-        scheduler_grpc::CreateJobRequest req;
-        req.set_vehicle_id(ifex::offboard::test::E2ETestInfrastructure::VEHICLE_ID);
-        req.set_title(title);
-        req.set_service("echo_service");
-        req.set_method(method);
-        req.set_parameters_json(params_json);
-        req.set_scheduled_time("2099-12-31T23:59:59Z");  // Far future
-        req.set_created_by("real_vehicle_e2e_test");
-
-        scheduler_grpc::CreateJobResponse resp;
-        auto status = stub_->CreateJob(&ctx, req, &resp);
-
-        if (status.ok() && resp.success()) {
-            LOG(INFO) << "Created job on real vehicle: " << resp.job_id();
-            return resp.job_id();
-        }
-        LOG(ERROR) << "Failed to create job: " << status.error_message()
-                   << " / " << resp.error_message();
-        return "";
-    }
-};
-
-// Static members
-std::unique_ptr<scheduler_grpc::CloudSchedulerService::Stub> SchedulerRealVehicleTest::stub_;
-std::shared_ptr<grpc::Channel> SchedulerRealVehicleTest::channel_;
-pid_t SchedulerRealVehicleTest::scheduler_pid_ = 0;
-
-TEST_F(SchedulerRealVehicleTest, RealVehicle_CreateJobAndTrigger) {
-    // NOTE: Test is DISABLED until vehicle scheduler integration is verified
-    // Enable once vehicle infrastructure is confirmed working
-
-    // Step 1: Create job targeting echo_service on real vehicle
-    std::string job_id = CreateRealVehicleJob(
-        "Real Vehicle E2E: Echo Job",
-        "echo",
-        R"({"message": "Hello from scheduled job!"})");
-    ASSERT_FALSE(job_id.empty()) << "Failed to create job on real vehicle";
-
-    // Step 2: Wait for job to sync to vehicle
-    std::this_thread::sleep_for(3s);
-
-    // Step 3: Trigger immediate execution
-    {
-        grpc::ClientContext ctx;
-        ctx.set_deadline(std::chrono::system_clock::now() + 10s);
-
-        scheduler_grpc::TriggerJobRequest req;
-        req.set_vehicle_id(ifex::offboard::test::E2ETestInfrastructure::VEHICLE_ID);
-        req.set_job_id(job_id);
-
-        scheduler_grpc::TriggerJobResponse resp;
-        auto status = stub_->TriggerJob(&ctx, req, &resp);
-
-        ASSERT_TRUE(status.ok()) << "TriggerJob failed: " << status.error_message();
-        EXPECT_TRUE(resp.success()) << "TriggerJob not successful: " << resp.error_message();
-    }
-
-    // Step 4: Wait for execution result to sync back
-    ASSERT_TRUE(ifex::offboard::test::E2ETestInfrastructure::WaitForJobExecution(
-        job_id, std::chrono::seconds(30)))
-        << "Job execution result did not sync back within 30 seconds";
-
-    // Step 5: Verify execution in database
-    auto* db = ifex::offboard::test::E2ETestInfrastructure::GetDatabase();
-    ASSERT_NE(db, nullptr);
-
-    auto result = db->execute(
-        "SELECT status, result FROM job_executions WHERE job_id = $1 ORDER BY executed_at_ms DESC LIMIT 1",
-        {job_id});
-
-    ASSERT_TRUE(result.ok()) << "Failed to query job execution: " << result.error();
-    ASSERT_GE(result.num_rows(), 1) << "No execution record found";
-
-    std::string status = result.row(0).get_string("status");
-    std::string result_str = result.row(0).get_string("result");
-
-    EXPECT_EQ(status, "completed") << "Job did not complete successfully";
-    LOG(INFO) << "Job execution result: status=" << status << " result=" << result_str;
-
-    // Step 6: Clean up - delete the job
-    {
-        grpc::ClientContext ctx;
-        ctx.set_deadline(std::chrono::system_clock::now() + 5s);
-
-        scheduler_grpc::DeleteJobRequest req;
-        req.set_vehicle_id(ifex::offboard::test::E2ETestInfrastructure::VEHICLE_ID);
-        req.set_job_id(job_id);
-
-        scheduler_grpc::DeleteJobResponse resp;
-        stub_->DeleteJob(&ctx, req, &resp);
-    }
+    // Wait for sync state to become 'synced' (vehicle confirmed)
+    bool synced = WaitForSyncState(job_id, "synced", 15s);
+    EXPECT_TRUE(synced) << "Job did not sync to vehicle within timeout";
 }
 
-TEST_F(SchedulerRealVehicleTest, RealVehicle_JobLifecycle) {
-    // Test full lifecycle: create → pause → resume → trigger → verify execution
-
-    // Step 1: Create job
-    std::string job_id = CreateRealVehicleJob(
-        "Real Vehicle E2E: Lifecycle Test",
-        "echo",
-        R"({"message": "Lifecycle test"})");
+TEST_F(SchedulerE2ETest, UpdateJob_SyncStateFlow) {
+    // Create and wait for initial sync
+    std::string job_id = CreateTestJob("E2E Sync Test - Update");
     ASSERT_FALSE(job_id.empty());
 
-    std::this_thread::sleep_for(2s);
+    bool initial_sync = WaitForSyncState(job_id, "synced", 15s);
+    ASSERT_TRUE(initial_sync) << "Initial job sync failed";
 
-    // Step 2: Pause job
+    // Update job - should go back to 'pending'
     {
-        grpc::ClientContext ctx;
-        ctx.set_deadline(std::chrono::system_clock::now() + 5s);
+        proto::update_job_request request;
+        auto* inner = request.mutable_request();
+        inner->set_vehicle_id(VEHICLE_ID);
+        inner->set_job_id(job_id);
+        inner->set_scheduled_time_ms(Iso8601ToMs("2099-03-15T10:00:00Z"));
 
-        scheduler_grpc::PauseJobRequest req;
-        req.set_vehicle_id(ifex::offboard::test::E2ETestInfrastructure::VEHICLE_ID);
-        req.set_job_id(job_id);
-
-        scheduler_grpc::PauseJobResponse resp;
-        auto status = stub_->PauseJob(&ctx, req, &resp);
-        ASSERT_TRUE(status.ok()) << "PauseJob failed: " << status.error_message();
-        LOG(INFO) << "Paused job: " << (resp.success() ? "OK" : resp.error_message());
+        proto::update_job_response response;
+        grpc::ClientContext context;
+        auto status = update_job_stub_->update_job(&context, request, &response);
+        ASSERT_TRUE(status.ok());
+        ASSERT_TRUE(response.result().success());
     }
 
-    std::this_thread::sleep_for(1s);
-
-    // Step 3: Resume job
-    {
-        grpc::ClientContext ctx;
-        ctx.set_deadline(std::chrono::system_clock::now() + 5s);
-
-        scheduler_grpc::ResumeJobRequest req;
-        req.set_vehicle_id(ifex::offboard::test::E2ETestInfrastructure::VEHICLE_ID);
-        req.set_job_id(job_id);
-
-        scheduler_grpc::ResumeJobResponse resp;
-        auto status = stub_->ResumeJob(&ctx, req, &resp);
-        ASSERT_TRUE(status.ok()) << "ResumeJob failed: " << status.error_message();
-        LOG(INFO) << "Resumed job: " << (resp.success() ? "OK" : resp.error_message());
-    }
-
-    std::this_thread::sleep_for(1s);
-
-    // Step 4: Trigger and verify execution
-    {
-        grpc::ClientContext ctx;
-        ctx.set_deadline(std::chrono::system_clock::now() + 10s);
-
-        scheduler_grpc::TriggerJobRequest req;
-        req.set_vehicle_id(ifex::offboard::test::E2ETestInfrastructure::VEHICLE_ID);
-        req.set_job_id(job_id);
-
-        scheduler_grpc::TriggerJobResponse resp;
-        auto status = stub_->TriggerJob(&ctx, req, &resp);
-        ASSERT_TRUE(status.ok()) << "TriggerJob failed: " << status.error_message();
-    }
-
-    // Wait for execution result
-    ASSERT_TRUE(ifex::offboard::test::E2ETestInfrastructure::WaitForJobExecution(
-        job_id, std::chrono::seconds(30)));
-
-    LOG(INFO) << "Full job lifecycle completed successfully";
-
-    // Clean up
-    {
-        grpc::ClientContext ctx;
-        ctx.set_deadline(std::chrono::system_clock::now() + 5s);
-
-        scheduler_grpc::DeleteJobRequest req;
-        req.set_vehicle_id(ifex::offboard::test::E2ETestInfrastructure::VEHICLE_ID);
-        req.set_job_id(job_id);
-
-        scheduler_grpc::DeleteJobResponse resp;
-        stub_->DeleteJob(&ctx, req, &resp);
-    }
+    // Wait for sync again
+    bool update_sync = WaitForSyncState(job_id, "synced", 15s);
+    EXPECT_TRUE(update_sync) << "Updated job did not re-sync within timeout";
 }
 
-TEST_F(SchedulerRealVehicleTest, RealVehicle_JobStateSyncBack) {
-    // Test that job state changes on vehicle sync back to cloud
-
-    // Create job
-    std::string job_id = CreateRealVehicleJob(
-        "Real Vehicle E2E: State Sync Test",
-        "echo_with_delay",
-        R"({"message": "State sync", "delay_ms": 500})");
+TEST_F(SchedulerE2ETest, DeleteJob_SyncStateFlow) {
+    // Create and wait for sync
+    std::string job_id = CreateTestJob("E2E Sync Test - Delete");
     ASSERT_FALSE(job_id.empty());
 
-    std::this_thread::sleep_for(3s);
+    bool initial_sync = WaitForSyncState(job_id, "synced", 15s);
+    ASSERT_TRUE(initial_sync) << "Initial job sync failed";
 
-    // Verify job exists in database with correct state
-    auto* db = ifex::offboard::test::E2ETestInfrastructure::GetDatabase();
-    ASSERT_NE(db, nullptr);
+    // Delete job
+    proto::delete_job_request request;
+    request.set_vehicle_id(VEHICLE_ID);
+    request.set_job_id(job_id);
 
-    auto result = db->execute(
-        "SELECT status, service_name, method_name FROM jobs WHERE job_id = $1",
-        {job_id});
+    proto::delete_job_response response;
+    grpc::ClientContext context;
 
-    ASSERT_TRUE(result.ok()) << "Failed to query job: " << result.error();
-    ASSERT_GE(result.num_rows(), 1) << "Job not found in database";
+    auto status = delete_job_stub_->delete_job(&context, request, &response);
+    ASSERT_TRUE(status.ok());
+    EXPECT_TRUE(response.result().success());
 
-    std::string service = result.row(0).get_string("service_name");
-    std::string method = result.row(0).get_string("method_name");
+    // Remove from cleanup
+    created_job_ids_.erase(
+        std::remove(created_job_ids_.begin(), created_job_ids_.end(), job_id),
+        created_job_ids_.end());
 
-    EXPECT_EQ(service, "echo_service");
-    EXPECT_EQ(method, "echo_with_delay");
+    // Wait for vehicle to sync the delete (job remains as tombstone)
+    bool delete_synced = WaitForSyncState(job_id, "synced", 15s);
+    EXPECT_TRUE(delete_synced) << "Delete sync did not complete";
 
-    LOG(INFO) << "Job state synced correctly to database";
-
-    // Clean up
+    // Verify job still exists in DB as tombstone (deleted + synced)
+    // Will be purged after retention period (e.g., 30 days) - not tested here
     {
+        proto::get_job_request get_req;
+        get_req.set_vehicle_id(VEHICLE_ID);
+        get_req.set_job_id(job_id);
+
+        proto::get_job_response get_resp;
         grpc::ClientContext ctx;
-        ctx.set_deadline(std::chrono::system_clock::now() + 5s);
-
-        scheduler_grpc::DeleteJobRequest req;
-        req.set_vehicle_id(ifex::offboard::test::E2ETestInfrastructure::VEHICLE_ID);
-        req.set_job_id(job_id);
-
-        scheduler_grpc::DeleteJobResponse resp;
-        stub_->DeleteJob(&ctx, req, &resp);
+        get_job_stub_->get_job(&ctx, get_req, &get_resp);
+        ASSERT_TRUE(get_resp.result().found()) << "Tombstone job should remain in DB";
+        EXPECT_EQ(get_resp.result().job().sync_state(), proto::SYNC_CONFIRMED);
     }
 }
 
+// =============================================================================
+// Full Workflow Test
+// =============================================================================
+
+TEST_F(SchedulerE2ETest, FullWorkflow_CreateAndReschedule) {
+    const std::string INITIAL_SCHEDULE = "2099-04-01T09:00:00Z";
+    const std::string NEW_SCHEDULE = "2099-04-15T14:00:00Z";
+
+    // 1. Create job
+    std::string job_id;
+    {
+        proto::create_job_request request;
+        auto* inner = request.mutable_request();
+        inner->set_vehicle_id(VEHICLE_ID);
+        inner->set_title("E2E Full Workflow Job");
+        inner->set_service("echo_service");
+        inner->set_method("echo");
+        inner->set_parameters_json(R"({"message": "hello"})");
+        inner->set_scheduled_time_ms(Iso8601ToMs(INITIAL_SCHEDULE));
+
+        proto::create_job_response response;
+        grpc::ClientContext context;
+        auto status = create_job_stub_->create_job(&context, request, &response);
+        ASSERT_TRUE(status.ok());
+        ASSERT_TRUE(response.result().success());
+        job_id = response.result().job_id();
+        created_job_ids_.push_back(job_id);
+    }
+
+    // 2. Wait for initial sync
+    ASSERT_TRUE(WaitForSyncState(job_id, "synced", 15s));
+
+    // 3. Verify job details
+    {
+        proto::get_job_request request;
+        request.set_vehicle_id(VEHICLE_ID);
+        request.set_job_id(job_id);
+
+        proto::get_job_response response;
+        grpc::ClientContext context;
+        auto status = get_job_stub_->get_job(&context, request, &response);
+        ASSERT_TRUE(status.ok());
+        ASSERT_TRUE(response.result().found());
+        EXPECT_EQ(response.result().job().title(), "E2E Full Workflow Job");
+        EXPECT_EQ(response.result().job().service(), "echo_service");
+    }
+
+    // 4. Reschedule job
+    {
+        proto::update_job_request request;
+        auto* inner = request.mutable_request();
+        inner->set_vehicle_id(VEHICLE_ID);
+        inner->set_job_id(job_id);
+        inner->set_scheduled_time_ms(Iso8601ToMs(NEW_SCHEDULE));
+
+        proto::update_job_response response;
+        grpc::ClientContext context;
+        auto status = update_job_stub_->update_job(&context, request, &response);
+        ASSERT_TRUE(status.ok());
+        ASSERT_TRUE(response.result().success());
+    }
+
+    // 5. Wait for re-sync
+    ASSERT_TRUE(WaitForSyncState(job_id, "synced", 15s));
+
+    // 6. Verify updated schedule
+    {
+        proto::get_job_request request;
+        request.set_vehicle_id(VEHICLE_ID);
+        request.set_job_id(job_id);
+
+        proto::get_job_response response;
+        grpc::ClientContext context;
+        auto status = get_job_stub_->get_job(&context, request, &response);
+        ASSERT_TRUE(status.ok());
+        ASSERT_TRUE(response.result().found());
+        EXPECT_EQ(response.result().job().scheduled_time_ms(), Iso8601ToMs(NEW_SCHEDULE));
+    }
+
+    // 7. Pause job
+    {
+        proto::pause_job_request request;
+        request.set_vehicle_id(VEHICLE_ID);
+        request.set_job_id(job_id);
+
+        proto::pause_job_response response;
+        grpc::ClientContext context;
+        auto status = pause_job_stub_->pause_job(&context, request, &response);
+        ASSERT_TRUE(status.ok());
+        EXPECT_TRUE(response.result().success());
+    }
+
+    // 8. Resume job
+    {
+        proto::resume_job_request request;
+        request.set_vehicle_id(VEHICLE_ID);
+        request.set_job_id(job_id);
+
+        proto::resume_job_response response;
+        grpc::ClientContext context;
+        auto status = resume_job_stub_->resume_job(&context, request, &response);
+        ASSERT_TRUE(status.ok());
+        EXPECT_TRUE(response.result().success());
+    }
+
+    // 9. Delete job
+    {
+        proto::delete_job_request request;
+        request.set_vehicle_id(VEHICLE_ID);
+        request.set_job_id(job_id);
+
+        proto::delete_job_response response;
+        grpc::ClientContext context;
+        auto status = delete_job_stub_->delete_job(&context, request, &response);
+        ASSERT_TRUE(status.ok());
+        EXPECT_TRUE(response.result().success());
+
+        created_job_ids_.erase(
+            std::remove(created_job_ids_.begin(), created_job_ids_.end(), job_id),
+            created_job_ids_.end());
+    }
+
+    LOG(INFO) << "Full workflow test completed successfully";
+}

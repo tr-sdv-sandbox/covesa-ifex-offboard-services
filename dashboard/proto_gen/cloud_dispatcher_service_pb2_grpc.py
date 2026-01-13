@@ -3,7 +3,7 @@
 import grpc
 import warnings
 
-import cloud_dispatcher_service_pb2 as cloud__dispatcher__service__pb2
+from . import cloud_dispatcher_service_pb2 as cloud__dispatcher__service__pb2
 
 GRPC_GENERATED_VERSION = '1.76.0'
 GRPC_VERSION = grpc.__version__
@@ -25,10 +25,8 @@ if _version_not_supported:
     )
 
 
-class CloudDispatcherServiceStub(object):
-    """=== gRPC Service Definition ===
-
-    """
+class call_method_serviceStub(object):
+    """Missing associated documentation comment in .proto file."""
 
     def __init__(self, channel):
         """Constructor.
@@ -36,133 +34,43 @@ class CloudDispatcherServiceStub(object):
         Args:
             channel: A grpc.Channel.
         """
-        self.CallMethod = channel.unary_unary(
-                '/ifex.cloud.dispatcher.CloudDispatcherService/CallMethod',
-                request_serializer=cloud__dispatcher__service__pb2.CallMethodRequest.SerializeToString,
-                response_deserializer=cloud__dispatcher__service__pb2.CallMethodResponse.FromString,
-                _registered_method=True)
-        self.CallMethodAsync = channel.unary_unary(
-                '/ifex.cloud.dispatcher.CloudDispatcherService/CallMethodAsync',
-                request_serializer=cloud__dispatcher__service__pb2.CallMethodAsyncRequest.SerializeToString,
-                response_deserializer=cloud__dispatcher__service__pb2.CallMethodAsyncResponse.FromString,
-                _registered_method=True)
-        self.GetRpcStatus = channel.unary_unary(
-                '/ifex.cloud.dispatcher.CloudDispatcherService/GetRpcStatus',
-                request_serializer=cloud__dispatcher__service__pb2.GetRpcStatusRequest.SerializeToString,
-                response_deserializer=cloud__dispatcher__service__pb2.GetRpcStatusResponse.FromString,
-                _registered_method=True)
-        self.ListRpcRequests = channel.unary_unary(
-                '/ifex.cloud.dispatcher.CloudDispatcherService/ListRpcRequests',
-                request_serializer=cloud__dispatcher__service__pb2.ListRpcRequestsRequest.SerializeToString,
-                response_deserializer=cloud__dispatcher__service__pb2.ListRpcRequestsResponse.FromString,
-                _registered_method=True)
-        self.CancelRpc = channel.unary_unary(
-                '/ifex.cloud.dispatcher.CloudDispatcherService/CancelRpc',
-                request_serializer=cloud__dispatcher__service__pb2.CancelRpcRequest.SerializeToString,
-                response_deserializer=cloud__dispatcher__service__pb2.CancelRpcResponse.FromString,
-                _registered_method=True)
-        self.CallFleetMethod = channel.unary_unary(
-                '/ifex.cloud.dispatcher.CloudDispatcherService/CallFleetMethod',
-                request_serializer=cloud__dispatcher__service__pb2.CallFleetMethodRequest.SerializeToString,
-                response_deserializer=cloud__dispatcher__service__pb2.CallFleetMethodResponse.FromString,
+        self.call_method = channel.unary_unary(
+                '/swdv.cloud_dispatcher_service.call_method_service/call_method',
+                request_serializer=cloud__dispatcher__service__pb2.call_method_request.SerializeToString,
+                response_deserializer=cloud__dispatcher__service__pb2.call_method_response.FromString,
                 _registered_method=True)
 
 
-class CloudDispatcherServiceServicer(object):
-    """=== gRPC Service Definition ===
+class call_method_serviceServicer(object):
+    """Missing associated documentation comment in .proto file."""
 
-    """
-
-    def CallMethod(self, request, context):
-        """Synchronous RPC call (blocks until response or timeout)
-        """
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
-
-    def CallMethodAsync(self, request, context):
-        """Asynchronous RPC call (returns correlation_id for polling)
-        """
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
-
-    def GetRpcStatus(self, request, context):
-        """Get status/result of an RPC request by correlation_id
-        """
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
-
-    def ListRpcRequests(self, request, context):
-        """List RPC requests for monitoring
-        """
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
-
-    def CancelRpc(self, request, context):
-        """Cancel a pending RPC request
-        """
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
-
-    def CallFleetMethod(self, request, context):
-        """Invoke method on multiple vehicles
-        """
+    def call_method(self, request, context):
+        """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
 
-def add_CloudDispatcherServiceServicer_to_server(servicer, server):
+def add_call_method_serviceServicer_to_server(servicer, server):
     rpc_method_handlers = {
-            'CallMethod': grpc.unary_unary_rpc_method_handler(
-                    servicer.CallMethod,
-                    request_deserializer=cloud__dispatcher__service__pb2.CallMethodRequest.FromString,
-                    response_serializer=cloud__dispatcher__service__pb2.CallMethodResponse.SerializeToString,
-            ),
-            'CallMethodAsync': grpc.unary_unary_rpc_method_handler(
-                    servicer.CallMethodAsync,
-                    request_deserializer=cloud__dispatcher__service__pb2.CallMethodAsyncRequest.FromString,
-                    response_serializer=cloud__dispatcher__service__pb2.CallMethodAsyncResponse.SerializeToString,
-            ),
-            'GetRpcStatus': grpc.unary_unary_rpc_method_handler(
-                    servicer.GetRpcStatus,
-                    request_deserializer=cloud__dispatcher__service__pb2.GetRpcStatusRequest.FromString,
-                    response_serializer=cloud__dispatcher__service__pb2.GetRpcStatusResponse.SerializeToString,
-            ),
-            'ListRpcRequests': grpc.unary_unary_rpc_method_handler(
-                    servicer.ListRpcRequests,
-                    request_deserializer=cloud__dispatcher__service__pb2.ListRpcRequestsRequest.FromString,
-                    response_serializer=cloud__dispatcher__service__pb2.ListRpcRequestsResponse.SerializeToString,
-            ),
-            'CancelRpc': grpc.unary_unary_rpc_method_handler(
-                    servicer.CancelRpc,
-                    request_deserializer=cloud__dispatcher__service__pb2.CancelRpcRequest.FromString,
-                    response_serializer=cloud__dispatcher__service__pb2.CancelRpcResponse.SerializeToString,
-            ),
-            'CallFleetMethod': grpc.unary_unary_rpc_method_handler(
-                    servicer.CallFleetMethod,
-                    request_deserializer=cloud__dispatcher__service__pb2.CallFleetMethodRequest.FromString,
-                    response_serializer=cloud__dispatcher__service__pb2.CallFleetMethodResponse.SerializeToString,
+            'call_method': grpc.unary_unary_rpc_method_handler(
+                    servicer.call_method,
+                    request_deserializer=cloud__dispatcher__service__pb2.call_method_request.FromString,
+                    response_serializer=cloud__dispatcher__service__pb2.call_method_response.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
-            'ifex.cloud.dispatcher.CloudDispatcherService', rpc_method_handlers)
+            'swdv.cloud_dispatcher_service.call_method_service', rpc_method_handlers)
     server.add_generic_rpc_handlers((generic_handler,))
-    server.add_registered_method_handlers('ifex.cloud.dispatcher.CloudDispatcherService', rpc_method_handlers)
+    server.add_registered_method_handlers('swdv.cloud_dispatcher_service.call_method_service', rpc_method_handlers)
 
 
  # This class is part of an EXPERIMENTAL API.
-class CloudDispatcherService(object):
-    """=== gRPC Service Definition ===
-
-    """
+class call_method_service(object):
+    """Missing associated documentation comment in .proto file."""
 
     @staticmethod
-    def CallMethod(request,
+    def call_method(request,
             target,
             options=(),
             channel_credentials=None,
@@ -175,9 +83,9 @@ class CloudDispatcherService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/ifex.cloud.dispatcher.CloudDispatcherService/CallMethod',
-            cloud__dispatcher__service__pb2.CallMethodRequest.SerializeToString,
-            cloud__dispatcher__service__pb2.CallMethodResponse.FromString,
+            '/swdv.cloud_dispatcher_service.call_method_service/call_method',
+            cloud__dispatcher__service__pb2.call_method_request.SerializeToString,
+            cloud__dispatcher__service__pb2.call_method_response.FromString,
             options,
             channel_credentials,
             insecure,
@@ -188,8 +96,53 @@ class CloudDispatcherService(object):
             metadata,
             _registered_method=True)
 
+
+class call_method_async_serviceStub(object):
+    """Missing associated documentation comment in .proto file."""
+
+    def __init__(self, channel):
+        """Constructor.
+
+        Args:
+            channel: A grpc.Channel.
+        """
+        self.call_method_async = channel.unary_unary(
+                '/swdv.cloud_dispatcher_service.call_method_async_service/call_method_async',
+                request_serializer=cloud__dispatcher__service__pb2.call_method_async_request.SerializeToString,
+                response_deserializer=cloud__dispatcher__service__pb2.call_method_async_response.FromString,
+                _registered_method=True)
+
+
+class call_method_async_serviceServicer(object):
+    """Missing associated documentation comment in .proto file."""
+
+    def call_method_async(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+
+def add_call_method_async_serviceServicer_to_server(servicer, server):
+    rpc_method_handlers = {
+            'call_method_async': grpc.unary_unary_rpc_method_handler(
+                    servicer.call_method_async,
+                    request_deserializer=cloud__dispatcher__service__pb2.call_method_async_request.FromString,
+                    response_serializer=cloud__dispatcher__service__pb2.call_method_async_response.SerializeToString,
+            ),
+    }
+    generic_handler = grpc.method_handlers_generic_handler(
+            'swdv.cloud_dispatcher_service.call_method_async_service', rpc_method_handlers)
+    server.add_generic_rpc_handlers((generic_handler,))
+    server.add_registered_method_handlers('swdv.cloud_dispatcher_service.call_method_async_service', rpc_method_handlers)
+
+
+ # This class is part of an EXPERIMENTAL API.
+class call_method_async_service(object):
+    """Missing associated documentation comment in .proto file."""
+
     @staticmethod
-    def CallMethodAsync(request,
+    def call_method_async(request,
             target,
             options=(),
             channel_credentials=None,
@@ -202,9 +155,9 @@ class CloudDispatcherService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/ifex.cloud.dispatcher.CloudDispatcherService/CallMethodAsync',
-            cloud__dispatcher__service__pb2.CallMethodAsyncRequest.SerializeToString,
-            cloud__dispatcher__service__pb2.CallMethodAsyncResponse.FromString,
+            '/swdv.cloud_dispatcher_service.call_method_async_service/call_method_async',
+            cloud__dispatcher__service__pb2.call_method_async_request.SerializeToString,
+            cloud__dispatcher__service__pb2.call_method_async_response.FromString,
             options,
             channel_credentials,
             insecure,
@@ -215,8 +168,53 @@ class CloudDispatcherService(object):
             metadata,
             _registered_method=True)
 
+
+class get_rpc_status_serviceStub(object):
+    """Missing associated documentation comment in .proto file."""
+
+    def __init__(self, channel):
+        """Constructor.
+
+        Args:
+            channel: A grpc.Channel.
+        """
+        self.get_rpc_status = channel.unary_unary(
+                '/swdv.cloud_dispatcher_service.get_rpc_status_service/get_rpc_status',
+                request_serializer=cloud__dispatcher__service__pb2.get_rpc_status_request.SerializeToString,
+                response_deserializer=cloud__dispatcher__service__pb2.get_rpc_status_response.FromString,
+                _registered_method=True)
+
+
+class get_rpc_status_serviceServicer(object):
+    """Missing associated documentation comment in .proto file."""
+
+    def get_rpc_status(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+
+def add_get_rpc_status_serviceServicer_to_server(servicer, server):
+    rpc_method_handlers = {
+            'get_rpc_status': grpc.unary_unary_rpc_method_handler(
+                    servicer.get_rpc_status,
+                    request_deserializer=cloud__dispatcher__service__pb2.get_rpc_status_request.FromString,
+                    response_serializer=cloud__dispatcher__service__pb2.get_rpc_status_response.SerializeToString,
+            ),
+    }
+    generic_handler = grpc.method_handlers_generic_handler(
+            'swdv.cloud_dispatcher_service.get_rpc_status_service', rpc_method_handlers)
+    server.add_generic_rpc_handlers((generic_handler,))
+    server.add_registered_method_handlers('swdv.cloud_dispatcher_service.get_rpc_status_service', rpc_method_handlers)
+
+
+ # This class is part of an EXPERIMENTAL API.
+class get_rpc_status_service(object):
+    """Missing associated documentation comment in .proto file."""
+
     @staticmethod
-    def GetRpcStatus(request,
+    def get_rpc_status(request,
             target,
             options=(),
             channel_credentials=None,
@@ -229,9 +227,9 @@ class CloudDispatcherService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/ifex.cloud.dispatcher.CloudDispatcherService/GetRpcStatus',
-            cloud__dispatcher__service__pb2.GetRpcStatusRequest.SerializeToString,
-            cloud__dispatcher__service__pb2.GetRpcStatusResponse.FromString,
+            '/swdv.cloud_dispatcher_service.get_rpc_status_service/get_rpc_status',
+            cloud__dispatcher__service__pb2.get_rpc_status_request.SerializeToString,
+            cloud__dispatcher__service__pb2.get_rpc_status_response.FromString,
             options,
             channel_credentials,
             insecure,
@@ -242,8 +240,53 @@ class CloudDispatcherService(object):
             metadata,
             _registered_method=True)
 
+
+class list_rpc_requests_serviceStub(object):
+    """Missing associated documentation comment in .proto file."""
+
+    def __init__(self, channel):
+        """Constructor.
+
+        Args:
+            channel: A grpc.Channel.
+        """
+        self.list_rpc_requests = channel.unary_unary(
+                '/swdv.cloud_dispatcher_service.list_rpc_requests_service/list_rpc_requests',
+                request_serializer=cloud__dispatcher__service__pb2.list_rpc_requests_request.SerializeToString,
+                response_deserializer=cloud__dispatcher__service__pb2.list_rpc_requests_response.FromString,
+                _registered_method=True)
+
+
+class list_rpc_requests_serviceServicer(object):
+    """Missing associated documentation comment in .proto file."""
+
+    def list_rpc_requests(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+
+def add_list_rpc_requests_serviceServicer_to_server(servicer, server):
+    rpc_method_handlers = {
+            'list_rpc_requests': grpc.unary_unary_rpc_method_handler(
+                    servicer.list_rpc_requests,
+                    request_deserializer=cloud__dispatcher__service__pb2.list_rpc_requests_request.FromString,
+                    response_serializer=cloud__dispatcher__service__pb2.list_rpc_requests_response.SerializeToString,
+            ),
+    }
+    generic_handler = grpc.method_handlers_generic_handler(
+            'swdv.cloud_dispatcher_service.list_rpc_requests_service', rpc_method_handlers)
+    server.add_generic_rpc_handlers((generic_handler,))
+    server.add_registered_method_handlers('swdv.cloud_dispatcher_service.list_rpc_requests_service', rpc_method_handlers)
+
+
+ # This class is part of an EXPERIMENTAL API.
+class list_rpc_requests_service(object):
+    """Missing associated documentation comment in .proto file."""
+
     @staticmethod
-    def ListRpcRequests(request,
+    def list_rpc_requests(request,
             target,
             options=(),
             channel_credentials=None,
@@ -256,9 +299,9 @@ class CloudDispatcherService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/ifex.cloud.dispatcher.CloudDispatcherService/ListRpcRequests',
-            cloud__dispatcher__service__pb2.ListRpcRequestsRequest.SerializeToString,
-            cloud__dispatcher__service__pb2.ListRpcRequestsResponse.FromString,
+            '/swdv.cloud_dispatcher_service.list_rpc_requests_service/list_rpc_requests',
+            cloud__dispatcher__service__pb2.list_rpc_requests_request.SerializeToString,
+            cloud__dispatcher__service__pb2.list_rpc_requests_response.FromString,
             options,
             channel_credentials,
             insecure,
@@ -269,8 +312,53 @@ class CloudDispatcherService(object):
             metadata,
             _registered_method=True)
 
+
+class cancel_rpc_serviceStub(object):
+    """Missing associated documentation comment in .proto file."""
+
+    def __init__(self, channel):
+        """Constructor.
+
+        Args:
+            channel: A grpc.Channel.
+        """
+        self.cancel_rpc = channel.unary_unary(
+                '/swdv.cloud_dispatcher_service.cancel_rpc_service/cancel_rpc',
+                request_serializer=cloud__dispatcher__service__pb2.cancel_rpc_request.SerializeToString,
+                response_deserializer=cloud__dispatcher__service__pb2.cancel_rpc_response.FromString,
+                _registered_method=True)
+
+
+class cancel_rpc_serviceServicer(object):
+    """Missing associated documentation comment in .proto file."""
+
+    def cancel_rpc(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+
+def add_cancel_rpc_serviceServicer_to_server(servicer, server):
+    rpc_method_handlers = {
+            'cancel_rpc': grpc.unary_unary_rpc_method_handler(
+                    servicer.cancel_rpc,
+                    request_deserializer=cloud__dispatcher__service__pb2.cancel_rpc_request.FromString,
+                    response_serializer=cloud__dispatcher__service__pb2.cancel_rpc_response.SerializeToString,
+            ),
+    }
+    generic_handler = grpc.method_handlers_generic_handler(
+            'swdv.cloud_dispatcher_service.cancel_rpc_service', rpc_method_handlers)
+    server.add_generic_rpc_handlers((generic_handler,))
+    server.add_registered_method_handlers('swdv.cloud_dispatcher_service.cancel_rpc_service', rpc_method_handlers)
+
+
+ # This class is part of an EXPERIMENTAL API.
+class cancel_rpc_service(object):
+    """Missing associated documentation comment in .proto file."""
+
     @staticmethod
-    def CancelRpc(request,
+    def cancel_rpc(request,
             target,
             options=(),
             channel_credentials=None,
@@ -283,9 +371,9 @@ class CloudDispatcherService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/ifex.cloud.dispatcher.CloudDispatcherService/CancelRpc',
-            cloud__dispatcher__service__pb2.CancelRpcRequest.SerializeToString,
-            cloud__dispatcher__service__pb2.CancelRpcResponse.FromString,
+            '/swdv.cloud_dispatcher_service.cancel_rpc_service/cancel_rpc',
+            cloud__dispatcher__service__pb2.cancel_rpc_request.SerializeToString,
+            cloud__dispatcher__service__pb2.cancel_rpc_response.FromString,
             options,
             channel_credentials,
             insecure,
@@ -296,8 +384,53 @@ class CloudDispatcherService(object):
             metadata,
             _registered_method=True)
 
+
+class call_fleet_method_serviceStub(object):
+    """Missing associated documentation comment in .proto file."""
+
+    def __init__(self, channel):
+        """Constructor.
+
+        Args:
+            channel: A grpc.Channel.
+        """
+        self.call_fleet_method = channel.unary_unary(
+                '/swdv.cloud_dispatcher_service.call_fleet_method_service/call_fleet_method',
+                request_serializer=cloud__dispatcher__service__pb2.call_fleet_method_request.SerializeToString,
+                response_deserializer=cloud__dispatcher__service__pb2.call_fleet_method_response.FromString,
+                _registered_method=True)
+
+
+class call_fleet_method_serviceServicer(object):
+    """Missing associated documentation comment in .proto file."""
+
+    def call_fleet_method(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+
+def add_call_fleet_method_serviceServicer_to_server(servicer, server):
+    rpc_method_handlers = {
+            'call_fleet_method': grpc.unary_unary_rpc_method_handler(
+                    servicer.call_fleet_method,
+                    request_deserializer=cloud__dispatcher__service__pb2.call_fleet_method_request.FromString,
+                    response_serializer=cloud__dispatcher__service__pb2.call_fleet_method_response.SerializeToString,
+            ),
+    }
+    generic_handler = grpc.method_handlers_generic_handler(
+            'swdv.cloud_dispatcher_service.call_fleet_method_service', rpc_method_handlers)
+    server.add_generic_rpc_handlers((generic_handler,))
+    server.add_registered_method_handlers('swdv.cloud_dispatcher_service.call_fleet_method_service', rpc_method_handlers)
+
+
+ # This class is part of an EXPERIMENTAL API.
+class call_fleet_method_service(object):
+    """Missing associated documentation comment in .proto file."""
+
     @staticmethod
-    def CallFleetMethod(request,
+    def call_fleet_method(request,
             target,
             options=(),
             channel_credentials=None,
@@ -310,9 +443,81 @@ class CloudDispatcherService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/ifex.cloud.dispatcher.CloudDispatcherService/CallFleetMethod',
-            cloud__dispatcher__service__pb2.CallFleetMethodRequest.SerializeToString,
-            cloud__dispatcher__service__pb2.CallFleetMethodResponse.FromString,
+            '/swdv.cloud_dispatcher_service.call_fleet_method_service/call_fleet_method',
+            cloud__dispatcher__service__pb2.call_fleet_method_request.SerializeToString,
+            cloud__dispatcher__service__pb2.call_fleet_method_response.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+
+class healthy_serviceStub(object):
+    """Missing associated documentation comment in .proto file."""
+
+    def __init__(self, channel):
+        """Constructor.
+
+        Args:
+            channel: A grpc.Channel.
+        """
+        self.healthy = channel.unary_unary(
+                '/swdv.cloud_dispatcher_service.healthy_service/healthy',
+                request_serializer=cloud__dispatcher__service__pb2.healthy_request.SerializeToString,
+                response_deserializer=cloud__dispatcher__service__pb2.healthy_response.FromString,
+                _registered_method=True)
+
+
+class healthy_serviceServicer(object):
+    """Missing associated documentation comment in .proto file."""
+
+    def healthy(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+
+def add_healthy_serviceServicer_to_server(servicer, server):
+    rpc_method_handlers = {
+            'healthy': grpc.unary_unary_rpc_method_handler(
+                    servicer.healthy,
+                    request_deserializer=cloud__dispatcher__service__pb2.healthy_request.FromString,
+                    response_serializer=cloud__dispatcher__service__pb2.healthy_response.SerializeToString,
+            ),
+    }
+    generic_handler = grpc.method_handlers_generic_handler(
+            'swdv.cloud_dispatcher_service.healthy_service', rpc_method_handlers)
+    server.add_generic_rpc_handlers((generic_handler,))
+    server.add_registered_method_handlers('swdv.cloud_dispatcher_service.healthy_service', rpc_method_handlers)
+
+
+ # This class is part of an EXPERIMENTAL API.
+class healthy_service(object):
+    """Missing associated documentation comment in .proto file."""
+
+    @staticmethod
+    def healthy(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/swdv.cloud_dispatcher_service.healthy_service/healthy',
+            cloud__dispatcher__service__pb2.healthy_request.SerializeToString,
+            cloud__dispatcher__service__pb2.healthy_response.FromString,
             options,
             channel_credentials,
             insecure,

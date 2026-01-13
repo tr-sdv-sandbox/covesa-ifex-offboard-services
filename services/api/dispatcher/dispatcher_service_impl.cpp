@@ -6,15 +6,31 @@
 
 #include "dispatcher-rpc-envelope.pb.h"
 
-namespace ifex {
-namespace cloud {
-namespace dispatcher {
+namespace ifex::cloud::dispatcher {
 
 CloudDispatcherServiceImpl::CloudDispatcherServiceImpl(
     std::shared_ptr<RpcRequestManager> request_manager,
     std::shared_ptr<RequestProducer> producer)
     : request_manager_(std::move(request_manager)),
-      producer_(std::move(producer)) {}
+      producer_(std::move(producer)),
+      is_healthy_(true) {}
+
+proto::cloud_rpc_status_t CloudDispatcherServiceImpl::map_status(RpcStatus status) {
+    switch (status) {
+        case RpcStatus::PENDING:
+        case RpcStatus::IN_PROGRESS:
+            return proto::RPC_PENDING;
+        case RpcStatus::SUCCESS:
+            return proto::RPC_SUCCESS;
+        case RpcStatus::TIMEOUT:
+            return proto::RPC_TIMEOUT;
+        case RpcStatus::CANCELLED:
+            return proto::RPC_CANCELLED;
+        case RpcStatus::ERROR:
+        default:
+            return proto::RPC_FAILED;
+    }
+}
 
 std::string CloudDispatcherServiceImpl::build_request_payload(
     const std::string& correlation_id,
@@ -38,53 +54,55 @@ std::string CloudDispatcherServiceImpl::build_request_payload(
     return request.SerializeAsString();
 }
 
-grpc::Status CloudDispatcherServiceImpl::CallMethod(
+grpc::Status CloudDispatcherServiceImpl::call_method(
     grpc::ServerContext* context,
-    const CallMethodRequest* request,
-    CallMethodResponse* response) {
+    const proto::call_method_request* request,
+    proto::call_method_response* response) {
 
-    // DEPRECATED: Sync CallMethod blocks a gRPC thread. Use CallMethodAsync + GetRpcStatus.
-    LOG(WARNING) << "CallMethod (sync) is deprecated for scalability. Use CallMethodAsync.";
+    const auto& req = request->request();
 
-    if (request->vehicle_id().empty()) {
+    // DEPRECATED: Sync call_method blocks a gRPC thread. Use call_method_async + get_rpc_status.
+    LOG(WARNING) << "call_method (sync) is deprecated for scalability. Use call_method_async.";
+
+    if (req.vehicle_id().empty()) {
         return grpc::Status(grpc::INVALID_ARGUMENT, "vehicle_id is required");
     }
-    if (request->service_name().empty()) {
+    if (req.service_name().empty()) {
         return grpc::Status(grpc::INVALID_ARGUMENT, "service_name is required");
     }
-    if (request->method_name().empty()) {
+    if (req.method_name().empty()) {
         return grpc::Status(grpc::INVALID_ARGUMENT, "method_name is required");
     }
 
-    int timeout_ms = request->timeout_ms();
+    int timeout_ms = req.timeout_ms();
     if (timeout_ms <= 0) {
         timeout_ms = 30000;  // Default 30 seconds
     }
 
-    LOG(INFO) << "CallMethod: vehicle=" << request->vehicle_id()
-              << " method=" << request->service_name() << "." << request->method_name()
+    LOG(INFO) << "call_method: vehicle=" << req.vehicle_id()
+              << " method=" << req.service_name() << "." << req.method_name()
               << " timeout=" << timeout_ms << "ms";
 
     try {
         // Create request and track it
         std::string correlation_id = request_manager_->create_request(
-            request->vehicle_id(),
-            request->service_name(),
-            request->method_name(),
-            request->parameters_json(),
-            request->requester_id(),
+            req.vehicle_id(),
+            req.service_name(),
+            req.method_name(),
+            req.parameters_json(),
+            req.requester_id(),
             std::chrono::milliseconds(timeout_ms));
 
         // Build and send the request payload
         std::string payload = build_request_payload(
             correlation_id,
-            request->vehicle_id(),
-            request->service_name(),
-            request->method_name(),
-            request->parameters_json(),
+            req.vehicle_id(),
+            req.service_name(),
+            req.method_name(),
+            req.parameters_json(),
             timeout_ms);
 
-        if (!producer_->send(request->vehicle_id(), payload)) {
+        if (!producer_->send(req.vehicle_id(), payload)) {
             return grpc::Status(grpc::INTERNAL, "Failed to send request to Kafka");
         }
 
@@ -96,27 +114,12 @@ grpc::Status CloudDispatcherServiceImpl::CallMethod(
             auto info = request_manager_->get_request(correlation_id);
             if (info && info->status != RpcStatus::PENDING && info->status != RpcStatus::IN_PROGRESS) {
                 // Request completed
-                response->set_correlation_id(correlation_id);
-
-                switch (info->status) {
-                    case RpcStatus::SUCCESS:
-                        response->set_status(::ifex::cloud::dispatcher::CLOUD_RPC_SUCCESS);
-                        break;
-                    case RpcStatus::TIMEOUT:
-                        response->set_status(::ifex::cloud::dispatcher::CLOUD_RPC_TIMEOUT);
-                        break;
-                    case RpcStatus::CANCELLED:
-                        response->set_status(::ifex::cloud::dispatcher::CLOUD_RPC_CANCELLED);
-                        break;
-                    case RpcStatus::ERROR:
-                    default:
-                        response->set_status(::ifex::cloud::dispatcher::CLOUD_RPC_FAILED);
-                        break;
-                }
-
-                response->set_result_json(info->result_json);
-                response->set_error_message(info->error_message);
-                response->set_duration_ms(info->execution_time_ms);
+                auto* result = response->mutable_result();
+                result->set_correlation_id(correlation_id);
+                result->set_status(map_status(info->status));
+                result->set_result_json(info->result_json);
+                result->set_error_message(info->error_message);
+                result->set_duration_ms(info->execution_time_ms);
 
                 return grpc::Status::OK;
             }
@@ -125,80 +128,84 @@ grpc::Status CloudDispatcherServiceImpl::CallMethod(
         }
 
         // Timeout
-        response->set_correlation_id(correlation_id);
-        response->set_status(::ifex::cloud::dispatcher::CLOUD_RPC_TIMEOUT);
-        response->set_error_message("Request timed out");
+        auto* result = response->mutable_result();
+        result->set_correlation_id(correlation_id);
+        result->set_status(proto::RPC_TIMEOUT);
+        result->set_error_message("Request timed out");
 
         return grpc::Status::OK;
 
     } catch (const std::exception& e) {
-        LOG(ERROR) << "CallMethod failed: " << e.what();
+        LOG(ERROR) << "call_method failed: " << e.what();
         return grpc::Status(grpc::INTERNAL, e.what());
     }
 }
 
-grpc::Status CloudDispatcherServiceImpl::CallMethodAsync(
+grpc::Status CloudDispatcherServiceImpl::call_method_async(
     grpc::ServerContext* context,
-    const CallMethodAsyncRequest* request,
-    CallMethodAsyncResponse* response) {
+    const proto::call_method_async_request* request,
+    proto::call_method_async_response* response) {
 
-    if (request->vehicle_id().empty()) {
+    const auto& req = request->request();
+
+    if (req.vehicle_id().empty()) {
         return grpc::Status(grpc::INVALID_ARGUMENT, "vehicle_id is required");
     }
-    if (request->service_name().empty()) {
+    if (req.service_name().empty()) {
         return grpc::Status(grpc::INVALID_ARGUMENT, "service_name is required");
     }
-    if (request->method_name().empty()) {
+    if (req.method_name().empty()) {
         return grpc::Status(grpc::INVALID_ARGUMENT, "method_name is required");
     }
 
-    int timeout_ms = request->timeout_ms();
+    int timeout_ms = req.timeout_ms();
     if (timeout_ms <= 0) {
         timeout_ms = 30000;
     }
 
-    LOG(INFO) << "CallMethodAsync: vehicle=" << request->vehicle_id()
-              << " method=" << request->service_name() << "." << request->method_name();
+    LOG(INFO) << "call_method_async: vehicle=" << req.vehicle_id()
+              << " method=" << req.service_name() << "." << req.method_name();
 
     try {
         // Create request and track it
         std::string correlation_id = request_manager_->create_request(
-            request->vehicle_id(),
-            request->service_name(),
-            request->method_name(),
-            request->parameters_json(),
-            request->requester_id(),
+            req.vehicle_id(),
+            req.service_name(),
+            req.method_name(),
+            req.parameters_json(),
+            req.requester_id(),
             std::chrono::milliseconds(timeout_ms));
 
         // Build and send the request payload
         std::string payload = build_request_payload(
             correlation_id,
-            request->vehicle_id(),
-            request->service_name(),
-            request->method_name(),
-            request->parameters_json(),
+            req.vehicle_id(),
+            req.service_name(),
+            req.method_name(),
+            req.parameters_json(),
             timeout_ms);
 
-        if (!producer_->send(request->vehicle_id(), payload)) {
+        if (!producer_->send(req.vehicle_id(), payload)) {
             return grpc::Status(grpc::INTERNAL, "Failed to send request to Kafka");
         }
 
         // Return immediately with correlation_id
-        response->set_correlation_id(correlation_id);
-        response->set_accepted(true);
+        auto* result = response->mutable_result();
+        result->set_correlation_id(correlation_id);
+        result->set_accepted(true);
 
         return grpc::Status::OK;
 
     } catch (const std::exception& e) {
-        LOG(ERROR) << "CallMethodAsync failed: " << e.what();
+        LOG(ERROR) << "call_method_async failed: " << e.what();
         return grpc::Status(grpc::INTERNAL, e.what());
     }
 }
 
-grpc::Status CloudDispatcherServiceImpl::GetRpcStatus(
+grpc::Status CloudDispatcherServiceImpl::get_rpc_status(
     grpc::ServerContext* context,
-    const GetRpcStatusRequest* request,
-    GetRpcStatusResponse* response) {
+    const proto::get_rpc_status_request* request,
+    proto::get_rpc_status_response* response) {
 
     if (request->correlation_id().empty()) {
         return grpc::Status(grpc::INVALID_ARGUMENT, "correlation_id is required");
@@ -210,61 +217,44 @@ grpc::Status CloudDispatcherServiceImpl::GetRpcStatus(
             return grpc::Status(grpc::NOT_FOUND, "Request not found");
         }
 
-        response->set_correlation_id(info->correlation_id);
-        response->set_vehicle_id(info->vehicle_id);
-        response->set_service_name(info->service_name);
-        response->set_method_name(info->method_name);
-
-        switch (info->status) {
-            case RpcStatus::PENDING:
-            case RpcStatus::IN_PROGRESS:
-                response->set_status(::ifex::cloud::dispatcher::CLOUD_RPC_PENDING);
-                break;
-            case RpcStatus::SUCCESS:
-                response->set_status(::ifex::cloud::dispatcher::CLOUD_RPC_SUCCESS);
-                break;
-            case RpcStatus::TIMEOUT:
-                response->set_status(::ifex::cloud::dispatcher::CLOUD_RPC_TIMEOUT);
-                break;
-            case RpcStatus::CANCELLED:
-                response->set_status(::ifex::cloud::dispatcher::CLOUD_RPC_CANCELLED);
-                break;
-            case RpcStatus::ERROR:
-            default:
-                response->set_status(::ifex::cloud::dispatcher::CLOUD_RPC_FAILED);
-                break;
-        }
-
-        response->set_result_json(info->result_json);
-        response->set_error_message(info->error_message);
-        response->set_created_at_ms(info->created_at_ms);
-        response->set_responded_at_ms(info->completed_at_ms);
-        response->set_duration_ms(info->execution_time_ms);
-        response->set_completed(info->status != RpcStatus::PENDING &&
-                                info->status != RpcStatus::IN_PROGRESS);
+        auto* status = response->mutable_status();
+        status->set_correlation_id(info->correlation_id);
+        status->set_vehicle_id(info->vehicle_id);
+        status->set_service_name(info->service_name);
+        status->set_method_name(info->method_name);
+        status->set_status(map_status(info->status));
+        status->set_result_json(info->result_json);
+        status->set_error_message(info->error_message);
+        status->set_created_at_ms(info->created_at_ms);
+        status->set_responded_at_ms(info->completed_at_ms);
+        status->set_duration_ms(info->execution_time_ms);
+        status->set_completed(info->status != RpcStatus::PENDING &&
+                              info->status != RpcStatus::IN_PROGRESS);
 
         return grpc::Status::OK;
 
     } catch (const std::exception& e) {
-        LOG(ERROR) << "GetRpcStatus failed: " << e.what();
+        LOG(ERROR) << "get_rpc_status failed: " << e.what();
         return grpc::Status(grpc::INTERNAL, e.what());
     }
 }
 
-grpc::Status CloudDispatcherServiceImpl::ListRpcRequests(
+grpc::Status CloudDispatcherServiceImpl::list_rpc_requests(
     grpc::ServerContext* context,
-    const ListRpcRequestsRequest* request,
-    ListRpcRequestsResponse* response) {
+    const proto::list_rpc_requests_request* request,
+    proto::list_rpc_requests_response* response) {
 
-    int page_size = request->page_size();
+    const auto& filter = request->filter();
+
+    int page_size = filter.page_size();
     if (page_size <= 0 || page_size > 1000) {
         page_size = 100;
     }
 
     int offset = 0;
-    if (!request->page_token().empty()) {
+    if (!filter.page_token().empty()) {
         try {
-            offset = std::stoi(request->page_token());
+            offset = std::stoi(filter.page_token());
         } catch (...) {
             return grpc::Status(grpc::INVALID_ARGUMENT, "Invalid page token");
         }
@@ -274,68 +264,50 @@ grpc::Status CloudDispatcherServiceImpl::ListRpcRequests(
         // Map filter status based on pending_only/failed_only flags
         RpcStatus filter_status = RpcStatus::PENDING;
         bool filter_by_status = false;
-        if (request->pending_only()) {
+        if (filter.pending_only()) {
             filter_status = RpcStatus::PENDING;
             filter_by_status = true;
-        } else if (request->failed_only()) {
+        } else if (filter.failed_only()) {
             filter_status = RpcStatus::ERROR;
             filter_by_status = true;
         }
 
         auto requests = request_manager_->list_requests(
-            request->vehicle_id_filter(),
-            request->service_name_filter(),
+            filter.vehicle_id_filter(),
+            filter.service_name_filter(),
             filter_by_status ? filter_status : RpcStatus::PENDING,
             page_size,
             offset);
 
+        auto* result = response->mutable_result();
         for (const auto& info : requests) {
-            auto* req = response->add_requests();
+            auto* req = result->add_requests();
             req->set_correlation_id(info.correlation_id);
             req->set_vehicle_id(info.vehicle_id);
             req->set_service_name(info.service_name);
             req->set_method_name(info.method_name);
             req->set_requester_id(info.requester_id);
-
-            switch (info.status) {
-                case RpcStatus::PENDING:
-                case RpcStatus::IN_PROGRESS:
-                    req->set_status(::ifex::cloud::dispatcher::CLOUD_RPC_PENDING);
-                    break;
-                case RpcStatus::SUCCESS:
-                    req->set_status(::ifex::cloud::dispatcher::CLOUD_RPC_SUCCESS);
-                    break;
-                case RpcStatus::TIMEOUT:
-                    req->set_status(::ifex::cloud::dispatcher::CLOUD_RPC_TIMEOUT);
-                    break;
-                case RpcStatus::CANCELLED:
-                    req->set_status(::ifex::cloud::dispatcher::CLOUD_RPC_CANCELLED);
-                    break;
-                default:
-                    req->set_status(::ifex::cloud::dispatcher::CLOUD_RPC_FAILED);
-                    break;
-            }
-
+            req->set_status(map_status(info.status));
             req->set_created_at_ms(info.created_at_ms);
             req->set_responded_at_ms(info.completed_at_ms);
         }
 
         if (static_cast<int>(requests.size()) == page_size) {
-            response->set_next_page_token(std::to_string(offset + page_size));
+            result->set_next_page_token(std::to_string(offset + page_size));
         }
 
         return grpc::Status::OK;
 
     } catch (const std::exception& e) {
-        LOG(ERROR) << "ListRpcRequests failed: " << e.what();
+        LOG(ERROR) << "list_rpc_requests failed: " << e.what();
         return grpc::Status(grpc::INTERNAL, e.what());
     }
 }
 
-grpc::Status CloudDispatcherServiceImpl::CancelRpc(
+grpc::Status CloudDispatcherServiceImpl::cancel_rpc(
     grpc::ServerContext* context,
-    const CancelRpcRequest* request,
-    CancelRpcResponse* response) {
+    const proto::cancel_rpc_request* request,
+    proto::cancel_rpc_response* response) {
 
     if (request->correlation_id().empty()) {
         return grpc::Status(grpc::INVALID_ARGUMENT, "correlation_id is required");
@@ -343,95 +315,111 @@ grpc::Status CloudDispatcherServiceImpl::CancelRpc(
 
     try {
         bool cancelled = request_manager_->cancel_request(request->correlation_id());
-        response->set_success(cancelled);
+        auto* result = response->mutable_result();
+        result->set_success(cancelled);
 
         if (!cancelled) {
-            response->set_error_message("Request not found or already completed");
+            result->set_error_message("Request not found or already completed");
         }
 
         return grpc::Status::OK;
 
     } catch (const std::exception& e) {
-        LOG(ERROR) << "CancelRpc failed: " << e.what();
+        LOG(ERROR) << "cancel_rpc failed: " << e.what();
         return grpc::Status(grpc::INTERNAL, e.what());
     }
 }
 
-grpc::Status CloudDispatcherServiceImpl::CallFleetMethod(
+grpc::Status CloudDispatcherServiceImpl::call_fleet_method(
     grpc::ServerContext* context,
-    const CallFleetMethodRequest* request,
-    CallFleetMethodResponse* response) {
+    const proto::call_fleet_method_request* request,
+    proto::call_fleet_method_response* response) {
 
-    if (request->vehicle_ids().empty()) {
+    const auto& req = request->request();
+
+    if (req.vehicle_ids().empty()) {
         return grpc::Status(grpc::INVALID_ARGUMENT, "At least one vehicle_id is required");
     }
-    if (request->service_name().empty()) {
+    if (req.service_name().empty()) {
         return grpc::Status(grpc::INVALID_ARGUMENT, "service_name is required");
     }
-    if (request->method_name().empty()) {
+    if (req.method_name().empty()) {
         return grpc::Status(grpc::INVALID_ARGUMENT, "method_name is required");
     }
 
-    int timeout_ms = request->timeout_ms();
+    int timeout_ms = req.timeout_ms();
     if (timeout_ms <= 0) {
         timeout_ms = 30000;
     }
 
-    LOG(INFO) << "CallFleetMethod: " << request->vehicle_ids().size() << " vehicles"
-              << " method=" << request->service_name() << "." << request->method_name();
+    LOG(INFO) << "call_fleet_method: " << req.vehicle_ids().size() << " vehicles"
+              << " method=" << req.service_name() << "." << req.method_name();
 
     try {
+        auto* result = response->mutable_result();
+
         // Send requests to all vehicles
-        for (const auto& vehicle_id : request->vehicle_ids()) {
+        for (const auto& vehicle_id : req.vehicle_ids()) {
             std::string correlation_id = request_manager_->create_request(
                 vehicle_id,
-                request->service_name(),
-                request->method_name(),
-                request->parameters_json(),
-                request->requester_id(),
+                req.service_name(),
+                req.method_name(),
+                req.parameters_json(),
+                req.requester_id(),
                 std::chrono::milliseconds(timeout_ms));
 
             std::string payload = build_request_payload(
                 correlation_id,
                 vehicle_id,
-                request->service_name(),
-                request->method_name(),
-                request->parameters_json(),
+                req.service_name(),
+                req.method_name(),
+                req.parameters_json(),
                 timeout_ms);
 
-            auto* result = response->add_results();
-            result->set_vehicle_id(vehicle_id);
-            result->set_correlation_id(correlation_id);
+            auto* fleet_result = result->add_results();
+            fleet_result->set_vehicle_id(vehicle_id);
+            fleet_result->set_correlation_id(correlation_id);
             if (producer_->send(vehicle_id, payload)) {
-                result->set_status(::ifex::cloud::dispatcher::CLOUD_RPC_PENDING);
+                fleet_result->set_status(proto::RPC_PENDING);
             } else {
-                result->set_status(::ifex::cloud::dispatcher::CLOUD_RPC_TRANSPORT_ERROR);
-                result->set_error_message("Failed to send to Kafka");
+                fleet_result->set_status(proto::RPC_TRANSPORT_ERROR);
+                fleet_result->set_error_message("Failed to send to Kafka");
             }
         }
 
         // Count successes and failures
         int successful = 0, failed = 0;
-        for (const auto& r : response->results()) {
-            if (r.status() == ::ifex::cloud::dispatcher::CLOUD_RPC_PENDING) {
+        for (const auto& r : result->results()) {
+            if (r.status() == proto::RPC_PENDING) {
                 successful++;
             } else {
                 failed++;
             }
         }
-        response->set_total_vehicles(response->results_size());
-        response->set_successful(successful);
-        response->set_failed(failed);
-        response->set_pending(successful);  // All successful are pending
+        result->set_total_vehicles(result->results_size());
+        result->set_successful(successful);
+        result->set_failed(failed);
+        result->set_pending(successful);  // All successful are pending
 
         return grpc::Status::OK;
 
     } catch (const std::exception& e) {
-        LOG(ERROR) << "CallFleetMethod failed: " << e.what();
+        LOG(ERROR) << "call_fleet_method failed: " << e.what();
         return grpc::Status(grpc::INTERNAL, e.what());
     }
 }
 
-}  // namespace dispatcher
-}  // namespace cloud
-}  // namespace ifex
+grpc::Status CloudDispatcherServiceImpl::healthy(
+    grpc::ServerContext* context,
+    const proto::healthy_request* request,
+    proto::healthy_response* response) {
+
+    // Check if all dependencies are healthy
+    bool healthy = is_healthy_ && request_manager_ && producer_;
+
+    response->set_is_healthy(healthy);
+
+    return grpc::Status::OK;
+}
+
+}  // namespace ifex::cloud::dispatcher

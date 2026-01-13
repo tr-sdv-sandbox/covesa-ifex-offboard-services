@@ -20,9 +20,9 @@
 #include "kafka_consumer.hpp"
 #include "kafka_producer.hpp"
 #include "postgres_client.hpp"
-#include "scheduler_offboard_codec.hpp"
 #include "scheduler_store.hpp"
 #include "scheduler-command-envelope.pb.h"
+#include "scheduler-sync-v2.pb.h"
 
 // Command-line flags
 DEFINE_string(kafka_broker, "localhost:9092", "Kafka broker address");
@@ -184,59 +184,74 @@ int main(int argc, char* argv[]) {
 
         VLOG(1) << "Received message (" << msg.value.size() << " bytes)";
 
-        // Decode offboard protobuf (contains vehicle_id in metadata)
-        auto offboard_msg = ifex::offboard::decode_scheduler_offboard(msg.value);
-        if (!offboard_msg) {
-            LOG(WARNING) << "Failed to decode scheduler offboard message";
+        // Parse V2 protocol message
+        swdv::scheduler_sync_v2::V2C_SyncMessage v2_msg;
+        if (!v2_msg.ParseFromString(msg.value) || v2_msg.vehicle_id().empty()) {
+            LOG(WARNING) << "Failed to parse V2 sync message";
             messages_failed++;
             continue;
         }
 
-        const std::string& vehicle_id = offboard_msg->metadata().vehicle_id();
+        std::string vehicle_id = v2_msg.vehicle_id();
+        std::string fleet_id;
+        std::string region;
 
-        // Process offboard message
-        try {
-            store.process_offboard_message(*offboard_msg);
-            messages_processed++;
-
-            VLOG(1) << "Processed " << offboard_msg->sync_message().events_size()
-                    << " events from " << vehicle_id;
-
-            // After processing vehicle sync, reconcile with offboard calendar
-            // This pushes any pending cloud-side jobs to the vehicle
-            if (store.has_pending_offboard_items(vehicle_id)) {
-                LOG(INFO) << "Vehicle " << vehicle_id << " has pending offboard items, reconciling...";
-
-                auto commands = store.reconcile_with_offboard(vehicle_id);
-
-                for (const auto& cmd : commands) {
-                    auto proto = build_scheduler_command(cmd);
-                    std::string serialized;
-                    if (!proto.SerializeToString(&serialized)) {
-                        LOG(ERROR) << "Failed to serialize reconcile command for " << cmd.job_id;
-                        continue;
-                    }
-
-                    // Send to c2v topic with vehicle_id as key
-                    if (producer->produce(FLAGS_kafka_c2v_topic, vehicle_id, serialized)) {
-                        LOG(INFO) << "Sent reconcile command " << cmd.job_id
-                                  << " type=" << static_cast<int>(cmd.type)
-                                  << " to vehicle " << vehicle_id;
-                    } else {
-                        LOG(ERROR) << "Failed to send reconcile command " << cmd.job_id;
-                    }
-                }
-
-                if (!commands.empty()) {
-                    LOG(INFO) << "Reconciliation complete: sent " << commands.size()
-                              << " commands to " << vehicle_id;
+        // Extract enrichment from Kafka key if present
+        // Key format: "vehicle_id" or "vehicle_id:fleet_id:region"
+        if (!msg.key.empty()) {
+            size_t pos1 = msg.key.find(':');
+            if (pos1 != std::string::npos) {
+                size_t pos2 = msg.key.find(':', pos1 + 1);
+                if (pos2 != std::string::npos) {
+                    fleet_id = msg.key.substr(pos1 + 1, pos2 - pos1 - 1);
+                    region = msg.key.substr(pos2 + 1);
                 }
             }
+        }
+
+        try {
+            store.process_v2_sync_message(vehicle_id, fleet_id, region, v2_msg);
+            messages_processed++;
+
+            LOG(INFO) << "Sync: " << vehicle_id << " - " << v2_msg.jobs_size()
+                      << " jobs, " << v2_msg.executions_size() << " executions";
 
         } catch (const std::exception& e) {
             LOG(ERROR) << "Error processing sync from " << vehicle_id
                        << ": " << e.what();
             messages_failed++;
+            continue;
+        }
+
+        // After processing vehicle sync, reconcile with offboard calendar
+        // This pushes any pending cloud-side jobs to the vehicle
+        if (store.has_pending_offboard_items(vehicle_id)) {
+            LOG(INFO) << "Vehicle " << vehicle_id << " has pending offboard items, reconciling...";
+
+            auto commands = store.reconcile_with_offboard(vehicle_id);
+
+            for (const auto& cmd : commands) {
+                auto proto = build_scheduler_command(cmd);
+                std::string serialized;
+                if (!proto.SerializeToString(&serialized)) {
+                    LOG(ERROR) << "Failed to serialize reconcile command for " << cmd.job_id;
+                    continue;
+                }
+
+                // Send to c2v topic with vehicle_id as key
+                if (producer->produce(FLAGS_kafka_c2v_topic, vehicle_id, serialized)) {
+                    LOG(INFO) << "Sent reconcile command " << cmd.job_id
+                              << " type=" << static_cast<int>(cmd.type)
+                              << " to vehicle " << vehicle_id;
+                } else {
+                    LOG(ERROR) << "Failed to send reconcile command " << cmd.job_id;
+                }
+            }
+
+            if (!commands.empty()) {
+                LOG(INFO) << "Reconciliation complete: sent " << commands.size()
+                          << " commands to " << vehicle_id;
+            }
         }
 
         // Periodic commit

@@ -120,6 +120,20 @@ public:
                                      std::chrono::seconds timeout = std::chrono::seconds(30));
 
     /**
+     * @brief Wait for job sync_state to reach expected value
+     * @param job_id Job identifier
+     * @param expected_state Expected sync state: "synced" or "pending"
+     * @param timeout Maximum wait time
+     * @return true if sync state matches within timeout
+     *
+     * The vehicle receives commands via MQTT, processes them, and syncs back.
+     * This method polls the database until the sync_state changes.
+     */
+    static bool WaitForJobSyncState(const std::string& job_id,
+                                     const std::string& expected_state,
+                                     std::chrono::seconds timeout = std::chrono::seconds(30));
+
+    /**
      * @brief Get the executable directory (where test binaries are)
      */
     static std::string GetExecutableDir();

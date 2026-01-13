@@ -1,0 +1,261 @@
+// Generated from cloud_backend_transport_service.ifex by covesa-ifex-core
+// DO NOT EDIT - regenerate with: ./generate_proto.sh
+syntax = "proto3";
+
+
+
+package swdv.cloud_backend_transport_service;
+
+// Namespace: cloud_transport
+// Cloud-side backend transport operations
+
+// Message persistence level (all levels preserve ordering)
+enum persistence_t {
+  BEST_EFFORT = 0;
+  VOLATILE = 1;
+  DURABLE = 2;
+}
+
+// Result of send operation
+enum publish_status_t {
+  OK = 0;
+  QUEUE_FULL = 1;
+  MESSAGE_TOO_LONG = 2;
+  INVALID_REQUEST = 3;
+  VEHICLE_UNKNOWN = 4;
+  WRONG_PARTITION = 5;
+}
+
+// Queue fill level for adaptive throttling
+enum queue_level_t {
+  EMPTY = 0;
+  LOW = 1;
+  NORMAL = 2;
+  HIGH = 3;
+  CRITICAL = 4;
+  FULL = 5;
+}
+
+// Vehicle connection status
+enum vehicle_status_t {
+  UNKNOWN = 0;
+  ONLINE = 1;
+  OFFLINE = 2;
+}
+
+// Optional transport-provided metadata. All fields optional. New fields can be added without breaking existing consumers.
+
+message transport_metadata_t {
+  string originator = 1;
+  uint64 message_id = 2;
+  sint64 received_at_ms = 3;
+  string source_topic = 4;
+}
+
+// Request to send message to a vehicle
+message send_request_t {
+  string vehicle_id = 1;
+  bytes payload = 2;
+  persistence_t persistence = 3;
+}
+
+// Result of send operation (returned immediately, non-blocking)
+message send_response_t {
+  uint64 sequence = 1;
+  publish_status_t status = 2;
+  queue_level_t queue_level = 3;
+}
+
+// Message received from a vehicle
+message vehicle_message_t {
+  string vehicle_id = 1;
+  bytes payload = 2;
+  uint64 sequence = 3;
+  sint64 timestamp_ms = 4;
+  transport_metadata_t metadata = 5;
+}
+
+// Delivery confirmation for a message sent to vehicle
+message delivery_ack_t {
+  string vehicle_id = 1;
+  uint64 sequence = 2;
+}
+
+// Vehicle online/offline status change
+message vehicle_status_event_t {
+  string vehicle_id = 1;
+  vehicle_status_t status = 2;
+  sint64 timestamp_ms = 3;
+  sint64 last_seen_ms = 4;
+}
+
+// Per-vehicle outbound queue status for adaptive throttling
+message queue_status_t {
+  string vehicle_id = 1;
+  queue_level_t level = 2;
+  uint32 queue_size = 3;
+  uint32 queue_capacity = 4;
+}
+
+// Channel binding info for this instance
+message channel_info_t {
+  uint32 content_id = 1;
+  uint32 partition_id = 2;
+  uint32 total_partitions = 3;
+}
+
+// Transport statistics (for this partition)
+message transport_stats_t {
+  uint64 messages_sent = 1;
+  uint64 messages_failed = 2;
+  uint64 bytes_sent = 3;
+  uint64 messages_received = 4;
+  uint64 bytes_received = 5;
+  uint32 vehicles_online = 6;
+  uint32 vehicles_total = 7;
+}
+
+// Method: send_to_vehicle
+// Queue message for delivery to a specific vehicle. Non-blocking. Vehicle must belong to this partition (returns WRONG_PARTITION otherwise). Messages are queued if vehicle is offline (per persistence level). Use on_ack to track delivery confirmation.
+
+message send_to_vehicle_request {
+  send_request_t request = 1;
+}
+
+message send_to_vehicle_response {
+  send_response_t result = 1;
+}
+
+service send_to_vehicle_service {
+  rpc send_to_vehicle(send_to_vehicle_request) returns (send_to_vehicle_response);
+}
+
+// Method: get_vehicle_status
+// Query current status of a vehicle
+message get_vehicle_status_request {
+  string vehicle_id = 1;
+}
+
+message get_vehicle_status_response {
+  vehicle_status_t status = 1;
+  sint64 last_seen_ms = 2;
+}
+
+service get_vehicle_status_service {
+  rpc get_vehicle_status(get_vehicle_status_request) returns (get_vehicle_status_response);
+}
+
+// Method: get_channel_info
+// Get channel binding info for this instance. Includes content_id and partition assignment.
+
+message get_channel_info_request {
+}
+
+message get_channel_info_response {
+  channel_info_t info = 1;
+}
+
+service get_channel_info_service {
+  rpc get_channel_info(get_channel_info_request) returns (get_channel_info_response);
+}
+
+// Method: get_queue_status
+// Get outbound queue status for a specific vehicle
+message get_queue_status_request {
+  string vehicle_id = 1;
+}
+
+message get_queue_status_response {
+  queue_status_t status = 1;
+}
+
+service get_queue_status_service {
+  rpc get_queue_status(get_queue_status_request) returns (get_queue_status_response);
+}
+
+// Method: get_stats
+// Get transport statistics
+message get_stats_request {
+}
+
+message get_stats_response {
+  transport_stats_t stats = 1;
+}
+
+service get_stats_service {
+  rpc get_stats(get_stats_request) returns (get_stats_response);
+}
+
+// Method: healthy
+// Check if transport is ready
+message healthy_request {
+}
+
+message healthy_response {
+  bool is_healthy = 1;
+}
+
+service healthy_service {
+  rpc healthy(healthy_request) returns (healthy_response);
+}
+
+// Event: on_vehicle_message
+// Message received from a vehicle in this partition. Only delivers messages for vehicles assigned to this partition. Sequence numbers are per-vehicle; gaps indicate dropped messages.
+
+message on_vehicle_message {
+  vehicle_message_t message = 1;
+}
+
+message on_vehicle_message_subscribe_request {
+}
+
+service on_vehicle_message_service {
+  // Server-streaming RPC for event subscription
+  rpc subscribe(on_vehicle_message_subscribe_request) returns (stream on_vehicle_message);
+}
+
+// Event: on_ack
+// Delivery confirmation for message sent to vehicle. Only successful deliveries generate acks. Gaps in sequence numbers indicate failed deliveries.
+
+message on_ack {
+  delivery_ack_t ack = 1;
+}
+
+message on_ack_subscribe_request {
+}
+
+service on_ack_service {
+  // Server-streaming RPC for event subscription
+  rpc subscribe(on_ack_subscribe_request) returns (stream on_ack);
+}
+
+// Event: on_vehicle_status
+// Vehicle online/offline status change. Triggered by MQTT LWT or heartbeat timeout.
+
+message on_vehicle_status {
+  vehicle_status_event_t event = 1;
+}
+
+message on_vehicle_status_subscribe_request {
+}
+
+service on_vehicle_status_service {
+  // Server-streaming RPC for event subscription
+  rpc subscribe(on_vehicle_status_subscribe_request) returns (stream on_vehicle_status);
+}
+
+// Event: on_queue_status_changed
+// Queue level changed. Subscribe for adaptive throttling feedback.
+message on_queue_status_changed {
+  queue_status_t status = 1;
+}
+
+message on_queue_status_changed_subscribe_request {
+}
+
+service on_queue_status_changed_service {
+  // Server-streaming RPC for event subscription
+  rpc subscribe(on_queue_status_changed_subscribe_request) returns (stream on_queue_status_changed);
+}
+
+

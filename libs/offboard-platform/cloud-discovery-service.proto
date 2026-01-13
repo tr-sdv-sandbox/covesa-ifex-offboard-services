@@ -1,0 +1,215 @@
+// Generated from cloud_discovery_service.ifex by covesa-ifex-core
+// DO NOT EDIT - regenerate with: ./generate_proto.sh
+syntax = "proto3";
+
+
+
+package swdv.cloud_discovery_service;
+
+// Namespace: discovery
+// Cloud discovery operations for fleet service queries
+
+// Information about a registered service
+message service_info_t {
+  string schema_hash = 1;
+  string service_name = 2;
+  string version = 3;
+  string ifex_schema = 4;
+  string methods_json = 5;
+  string structs_json = 6;
+  string enums_json = 7;
+  uint64 first_seen_ms = 8;
+  uint64 last_seen_ms = 9;
+}
+
+// Summary information about a vehicle
+message vehicle_summary_t {
+  string vehicle_id = 1;
+  string fleet_id = 2;
+  string region = 3;
+  string model = 4;
+  sint32 year = 5;
+  string owner = 6;
+  sint32 service_count = 7;
+  sint32 job_count = 8;
+  uint64 last_seen_ms = 9;
+  bool is_online = 10;
+  uint64 created_at_ms = 11;
+  uint64 updated_at_ms = 12;
+}
+
+// Service registered on a specific vehicle
+message service_location_t {
+  string vehicle_id = 1;
+  string fleet_id = 2;
+  string region = 3;
+  service_info_t service = 4;
+}
+
+// Fleet-wide statistics for a service
+message service_stats_t {
+  string service_name = 1;
+  sint32 vehicle_count = 2;
+  sint32 available_count = 3;
+}
+
+// Filters for listing vehicles
+message list_vehicles_filter_t {
+  string vehicle_id_pattern = 1;
+  string fleet_id_filter = 2;
+  string region_filter = 3;
+  bool online_only = 4;
+  bool with_services_only = 5;
+  sint32 page_size = 6;
+  string page_token = 7;
+}
+
+// List of vehicles
+message list_vehicles_response_t {
+  repeated vehicle_summary_t vehicles = 1;
+  string next_page_token = 2;
+  sint32 total_count = 3;
+}
+
+// Services registered on a vehicle
+message get_vehicle_services_response_t {
+  string vehicle_id = 1;
+  string fleet_id = 2;
+  string region = 3;
+  repeated service_info_t services = 4;
+  uint64 last_sync_ms = 5;
+}
+
+// Filters for querying services by name
+message query_services_filter_t {
+  string service_name_pattern = 1;
+  string fleet_id_filter = 2;
+  string region_filter = 3;
+  bool available_only = 4;
+  sint32 page_size = 5;
+  string page_token = 6;
+}
+
+// Services matching the query
+message query_services_response_t {
+  repeated service_location_t locations = 1;
+  string next_page_token = 2;
+  sint32 total_count = 3;
+}
+
+// Filters for fleet statistics
+message fleet_stats_filter_t {
+  string fleet_id_filter = 1;
+  string region_filter = 2;
+}
+
+// Fleet-wide service statistics
+message fleet_stats_response_t {
+  repeated service_stats_t stats = 1;
+  sint32 total_vehicles = 2;
+  sint32 online_vehicles = 3;
+  sint32 total_services = 4;
+}
+
+// Filters for finding vehicles with a specific service
+message find_vehicles_filter_t {
+  string service_name = 1;
+  string method_name = 2;
+  string fleet_id_filter = 3;
+  string region_filter = 4;
+  bool available_only = 5;
+  sint32 page_size = 6;
+  string page_token = 7;
+}
+
+// Vehicles with the requested service
+message find_vehicles_response_t {
+  repeated vehicle_summary_t vehicles = 1;
+  string next_page_token = 2;
+  sint32 total_count = 3;
+}
+
+// Method: list_vehicles
+// List all vehicles with summary info
+message list_vehicles_request {
+  list_vehicles_filter_t filter = 1;
+}
+
+message list_vehicles_response {
+  list_vehicles_response_t result = 1;
+}
+
+service list_vehicles_service {
+  rpc list_vehicles(list_vehicles_request) returns (list_vehicles_response);
+}
+
+// Method: get_vehicle_services
+// Get detailed services for a specific vehicle
+message get_vehicle_services_request {
+  string vehicle_id = 1;
+}
+
+message get_vehicle_services_response {
+  get_vehicle_services_response_t result = 1;
+}
+
+service get_vehicle_services_service {
+  rpc get_vehicle_services(get_vehicle_services_request) returns (get_vehicle_services_response);
+}
+
+// Method: query_services_by_name
+// Query services across fleet by name pattern
+message query_services_by_name_request {
+  query_services_filter_t filter = 1;
+}
+
+message query_services_by_name_response {
+  query_services_response_t result = 1;
+}
+
+service query_services_by_name_service {
+  rpc query_services_by_name(query_services_by_name_request) returns (query_services_by_name_response);
+}
+
+// Method: get_fleet_service_stats
+// Get fleet-wide service statistics
+message get_fleet_service_stats_request {
+  fleet_stats_filter_t filter = 1;
+}
+
+message get_fleet_service_stats_response {
+  fleet_stats_response_t result = 1;
+}
+
+service get_fleet_service_stats_service {
+  rpc get_fleet_service_stats(get_fleet_service_stats_request) returns (get_fleet_service_stats_response);
+}
+
+// Method: find_vehicles_with_service
+// Find all vehicles that have a specific service
+message find_vehicles_with_service_request {
+  find_vehicles_filter_t filter = 1;
+}
+
+message find_vehicles_with_service_response {
+  find_vehicles_response_t result = 1;
+}
+
+service find_vehicles_with_service_service {
+  rpc find_vehicles_with_service(find_vehicles_with_service_request) returns (find_vehicles_with_service_response);
+}
+
+// Method: healthy
+// Check if discovery service is ready
+message healthy_request {
+}
+
+message healthy_response {
+  bool is_healthy = 1;
+}
+
+service healthy_service {
+  rpc healthy(healthy_request) returns (healthy_response);
+}
+
+

@@ -91,10 +91,24 @@ ctest -L e2e --output-on-failure    # All E2E tests
 | `vehicle_enrichment` | Fleet assignment, region, model metadata |
 | `schema_registry` | Deduplicated IFEX schemas by SHA-256 hash |
 | `vehicle_schemas` | Vehicle-to-schema junction table |
-| `jobs` | Scheduled jobs (from content_id=202) |
+| `jobs` | Scheduled jobs (cloud + vehicle created, with sync tracking) |
 | `job_executions` | Job execution history |
-| `offboard_calendar` | Cloud-side jobs pending sync to vehicles |
 | `sync_state` | Per-vehicle sync sequence/checksum |
+
+### Jobs Table Sync Tracking
+
+The `jobs` table supports bidirectional job creation with sync state tracking:
+
+| Column | Values | Description |
+|--------|--------|-------------|
+| `origin` | `cloud`, `vehicle` | Who created the job |
+| `sync_state` | `pending`, `synced` | Whether vehicle has confirmed the job |
+
+**Flow:**
+- Cloud creates job → `origin='cloud'`, `sync_state='pending'`
+- Vehicle syncs job → `sync_state='synced'`
+- Cloud updates any job → `sync_state='pending'`
+- Vehicle syncs again → `sync_state='synced'`
 
 ## Code Conventions
 
@@ -417,6 +431,74 @@ E2E Test Process
     └─ TearDownTestSuite()
         └─ Stop all services and clean up
 ```
+
+### CRITICAL: E2E Test Message Flow
+
+**The CORRECT E2E test flow uses real vehicle containers:**
+
+```
+Test Process
+    │
+    ▼ gRPC
+Cloud API (dispatcher_api, scheduler_api, etc.)
+    │
+    ▼ Kafka
+mqtt_kafka_bridge
+    │
+    ▼ MQTT
+Vehicle Container (ifex-vehicle:latest)
+    │
+    ▼ Vehicle Backend Transport
+Vehicle Services (echo_service, scheduler, etc.)
+    │
+    ▼ Response via same path back
+Test Process receives response
+```
+
+**DO NOT write tests that simulate vehicle responses by producing directly to Kafka.**
+
+This is WRONG:
+```cpp
+// ❌ WRONG - This is NOT an E2E test, it's a unit test with mocked responses
+TEST_F(FakeE2ETest, SimulatedRoundTrip) {
+    // Send request via cloud API
+    stub_->CallMethod(...);
+
+    // Simulate vehicle response by producing directly to Kafka
+    kafka_producer_->produce(KAFKA_TOPIC_V2C, response);  // ❌ WRONG!
+
+    // Poll for response
+    // This only tests: Cloud API ↔ Kafka, NOT the full flow
+}
+```
+
+This is CORRECT:
+```cpp
+// ✅ CORRECT - Real vehicle container handles the request
+class RealE2ETest : public ifex::offboard::test::E2ETestFixture {
+    // E2ETestFixture starts real ifex-vehicle container
+};
+
+TEST_F(RealE2ETest, RealRoundTrip) {
+    // Send request via cloud API
+    stub_->CallMethod(...);
+
+    // Real vehicle container receives via MQTT, processes, responds
+    // Response flows back through: Vehicle → MQTT → Kafka → Cloud API
+
+    // This tests the FULL flow
+}
+```
+
+### Test Categories
+
+| Category | Pattern | Purpose |
+|----------|---------|---------|
+| **Unit tests** | No external dependencies | Test single class/function logic |
+| **Validation tests** | Cloud API only | Test input validation, error handling |
+| **E2E tests** | `E2ETestFixture` | Test full cloud→vehicle→cloud flow |
+
+**Key rule**: If your test produces/consumes Kafka directly to simulate vehicle behavior, it's NOT an E2E test - it's a unit test in disguise. Use `E2ETestFixture` with real vehicle containers for true E2E testing.
 
 ## Fleet Dashboard
 

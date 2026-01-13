@@ -14,6 +14,15 @@ namespace scheduler {
 // Data structs for query results (distinct from protobuf-generated classes)
 namespace query {
 
+/// Sync state enum (matches proto sync_state_t)
+enum class SyncState {
+    UNKNOWN = 0,
+    PENDING = 1,
+    CONFIRMED = 2,
+    FAILED = 3,
+    OUT_OF_SYNC = 4
+};
+
 /// Job information for listing
 struct JobInfoData {
     std::string job_id;
@@ -24,14 +33,15 @@ struct JobInfoData {
     std::string service_name;
     std::string method_name;
     std::string parameters_json;
-    std::string scheduled_time;
+    std::string scheduled_time;  // ISO8601 string from DB
     std::string recurrence_rule;
-    std::string end_time;
+    std::string end_time;  // ISO8601 string from DB
     int status = 0;
-    int64_t created_at_ns = 0;
-    int64_t updated_at_ns = 0;
-    int64_t next_run_ns = 0;
+    int64_t created_at_ms = 0;
+    int64_t updated_at_ms = 0;
     int execution_count = 0;
+    SyncState sync_state = SyncState::UNKNOWN;
+    int64_t synced_at_ms = 0;
 };
 
 /// Job execution info

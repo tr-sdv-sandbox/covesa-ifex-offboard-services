@@ -3,7 +3,7 @@
 import grpc
 import warnings
 
-import cloud_scheduler_service_pb2 as cloud__scheduler__service__pb2
+from . import cloud_scheduler_service_pb2 as cloud__scheduler__service__pb2
 
 GRPC_GENERATED_VERSION = '1.76.0'
 GRPC_VERSION = grpc.__version__
@@ -25,10 +25,8 @@ if _version_not_supported:
     )
 
 
-class CloudSchedulerServiceStub(object):
-    """=== gRPC Service Definition ===
-
-    """
+class create_job_serviceStub(object):
+    """Missing associated documentation comment in .proto file."""
 
     def __init__(self, channel):
         """Constructor.
@@ -36,226 +34,43 @@ class CloudSchedulerServiceStub(object):
         Args:
             channel: A grpc.Channel.
         """
-        self.CreateJob = channel.unary_unary(
-                '/ifex.cloud.scheduler.CloudSchedulerService/CreateJob',
-                request_serializer=cloud__scheduler__service__pb2.CreateJobRequest.SerializeToString,
-                response_deserializer=cloud__scheduler__service__pb2.CreateJobResponse.FromString,
-                _registered_method=True)
-        self.UpdateJob = channel.unary_unary(
-                '/ifex.cloud.scheduler.CloudSchedulerService/UpdateJob',
-                request_serializer=cloud__scheduler__service__pb2.UpdateJobRequest.SerializeToString,
-                response_deserializer=cloud__scheduler__service__pb2.UpdateJobResponse.FromString,
-                _registered_method=True)
-        self.DeleteJob = channel.unary_unary(
-                '/ifex.cloud.scheduler.CloudSchedulerService/DeleteJob',
-                request_serializer=cloud__scheduler__service__pb2.DeleteJobRequest.SerializeToString,
-                response_deserializer=cloud__scheduler__service__pb2.DeleteJobResponse.FromString,
-                _registered_method=True)
-        self.PauseJob = channel.unary_unary(
-                '/ifex.cloud.scheduler.CloudSchedulerService/PauseJob',
-                request_serializer=cloud__scheduler__service__pb2.PauseJobRequest.SerializeToString,
-                response_deserializer=cloud__scheduler__service__pb2.PauseJobResponse.FromString,
-                _registered_method=True)
-        self.ResumeJob = channel.unary_unary(
-                '/ifex.cloud.scheduler.CloudSchedulerService/ResumeJob',
-                request_serializer=cloud__scheduler__service__pb2.ResumeJobRequest.SerializeToString,
-                response_deserializer=cloud__scheduler__service__pb2.ResumeJobResponse.FromString,
-                _registered_method=True)
-        self.TriggerJob = channel.unary_unary(
-                '/ifex.cloud.scheduler.CloudSchedulerService/TriggerJob',
-                request_serializer=cloud__scheduler__service__pb2.TriggerJobRequest.SerializeToString,
-                response_deserializer=cloud__scheduler__service__pb2.TriggerJobResponse.FromString,
-                _registered_method=True)
-        self.GetJob = channel.unary_unary(
-                '/ifex.cloud.scheduler.CloudSchedulerService/GetJob',
-                request_serializer=cloud__scheduler__service__pb2.GetJobRequest.SerializeToString,
-                response_deserializer=cloud__scheduler__service__pb2.GetJobResponse.FromString,
-                _registered_method=True)
-        self.ListJobs = channel.unary_unary(
-                '/ifex.cloud.scheduler.CloudSchedulerService/ListJobs',
-                request_serializer=cloud__scheduler__service__pb2.ListJobsRequest.SerializeToString,
-                response_deserializer=cloud__scheduler__service__pb2.ListJobsResponse.FromString,
-                _registered_method=True)
-        self.GetJobExecutions = channel.unary_unary(
-                '/ifex.cloud.scheduler.CloudSchedulerService/GetJobExecutions',
-                request_serializer=cloud__scheduler__service__pb2.GetJobExecutionsRequest.SerializeToString,
-                response_deserializer=cloud__scheduler__service__pb2.GetJobExecutionsResponse.FromString,
-                _registered_method=True)
-        self.CreateFleetJob = channel.unary_unary(
-                '/ifex.cloud.scheduler.CloudSchedulerService/CreateFleetJob',
-                request_serializer=cloud__scheduler__service__pb2.CreateFleetJobRequest.SerializeToString,
-                response_deserializer=cloud__scheduler__service__pb2.CreateFleetJobResponse.FromString,
-                _registered_method=True)
-        self.DeleteFleetJob = channel.unary_unary(
-                '/ifex.cloud.scheduler.CloudSchedulerService/DeleteFleetJob',
-                request_serializer=cloud__scheduler__service__pb2.DeleteFleetJobRequest.SerializeToString,
-                response_deserializer=cloud__scheduler__service__pb2.DeleteFleetJobResponse.FromString,
-                _registered_method=True)
-        self.GetFleetJobStats = channel.unary_unary(
-                '/ifex.cloud.scheduler.CloudSchedulerService/GetFleetJobStats',
-                request_serializer=cloud__scheduler__service__pb2.GetFleetJobStatsRequest.SerializeToString,
-                response_deserializer=cloud__scheduler__service__pb2.GetFleetJobStatsResponse.FromString,
+        self.create_job = channel.unary_unary(
+                '/swdv.cloud_scheduler_service.create_job_service/create_job',
+                request_serializer=cloud__scheduler__service__pb2.create_job_request.SerializeToString,
+                response_deserializer=cloud__scheduler__service__pb2.create_job_response.FromString,
                 _registered_method=True)
 
 
-class CloudSchedulerServiceServicer(object):
-    """=== gRPC Service Definition ===
+class create_job_serviceServicer(object):
+    """Missing associated documentation comment in .proto file."""
 
-    """
-
-    def CreateJob(self, request, context):
-        """Single vehicle operations
-        """
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
-
-    def UpdateJob(self, request, context):
-        """Missing associated documentation comment in .proto file."""
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
-
-    def DeleteJob(self, request, context):
-        """Missing associated documentation comment in .proto file."""
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
-
-    def PauseJob(self, request, context):
-        """Missing associated documentation comment in .proto file."""
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
-
-    def ResumeJob(self, request, context):
-        """Missing associated documentation comment in .proto file."""
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
-
-    def TriggerJob(self, request, context):
-        """Missing associated documentation comment in .proto file."""
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
-
-    def GetJob(self, request, context):
-        """Query operations (read from PostgreSQL)
-        """
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
-
-    def ListJobs(self, request, context):
-        """Missing associated documentation comment in .proto file."""
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
-
-    def GetJobExecutions(self, request, context):
-        """Missing associated documentation comment in .proto file."""
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
-
-    def CreateFleetJob(self, request, context):
-        """Fleet-wide operations
-        """
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
-
-    def DeleteFleetJob(self, request, context):
-        """Missing associated documentation comment in .proto file."""
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
-
-    def GetFleetJobStats(self, request, context):
+    def create_job(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
 
-def add_CloudSchedulerServiceServicer_to_server(servicer, server):
+def add_create_job_serviceServicer_to_server(servicer, server):
     rpc_method_handlers = {
-            'CreateJob': grpc.unary_unary_rpc_method_handler(
-                    servicer.CreateJob,
-                    request_deserializer=cloud__scheduler__service__pb2.CreateJobRequest.FromString,
-                    response_serializer=cloud__scheduler__service__pb2.CreateJobResponse.SerializeToString,
-            ),
-            'UpdateJob': grpc.unary_unary_rpc_method_handler(
-                    servicer.UpdateJob,
-                    request_deserializer=cloud__scheduler__service__pb2.UpdateJobRequest.FromString,
-                    response_serializer=cloud__scheduler__service__pb2.UpdateJobResponse.SerializeToString,
-            ),
-            'DeleteJob': grpc.unary_unary_rpc_method_handler(
-                    servicer.DeleteJob,
-                    request_deserializer=cloud__scheduler__service__pb2.DeleteJobRequest.FromString,
-                    response_serializer=cloud__scheduler__service__pb2.DeleteJobResponse.SerializeToString,
-            ),
-            'PauseJob': grpc.unary_unary_rpc_method_handler(
-                    servicer.PauseJob,
-                    request_deserializer=cloud__scheduler__service__pb2.PauseJobRequest.FromString,
-                    response_serializer=cloud__scheduler__service__pb2.PauseJobResponse.SerializeToString,
-            ),
-            'ResumeJob': grpc.unary_unary_rpc_method_handler(
-                    servicer.ResumeJob,
-                    request_deserializer=cloud__scheduler__service__pb2.ResumeJobRequest.FromString,
-                    response_serializer=cloud__scheduler__service__pb2.ResumeJobResponse.SerializeToString,
-            ),
-            'TriggerJob': grpc.unary_unary_rpc_method_handler(
-                    servicer.TriggerJob,
-                    request_deserializer=cloud__scheduler__service__pb2.TriggerJobRequest.FromString,
-                    response_serializer=cloud__scheduler__service__pb2.TriggerJobResponse.SerializeToString,
-            ),
-            'GetJob': grpc.unary_unary_rpc_method_handler(
-                    servicer.GetJob,
-                    request_deserializer=cloud__scheduler__service__pb2.GetJobRequest.FromString,
-                    response_serializer=cloud__scheduler__service__pb2.GetJobResponse.SerializeToString,
-            ),
-            'ListJobs': grpc.unary_unary_rpc_method_handler(
-                    servicer.ListJobs,
-                    request_deserializer=cloud__scheduler__service__pb2.ListJobsRequest.FromString,
-                    response_serializer=cloud__scheduler__service__pb2.ListJobsResponse.SerializeToString,
-            ),
-            'GetJobExecutions': grpc.unary_unary_rpc_method_handler(
-                    servicer.GetJobExecutions,
-                    request_deserializer=cloud__scheduler__service__pb2.GetJobExecutionsRequest.FromString,
-                    response_serializer=cloud__scheduler__service__pb2.GetJobExecutionsResponse.SerializeToString,
-            ),
-            'CreateFleetJob': grpc.unary_unary_rpc_method_handler(
-                    servicer.CreateFleetJob,
-                    request_deserializer=cloud__scheduler__service__pb2.CreateFleetJobRequest.FromString,
-                    response_serializer=cloud__scheduler__service__pb2.CreateFleetJobResponse.SerializeToString,
-            ),
-            'DeleteFleetJob': grpc.unary_unary_rpc_method_handler(
-                    servicer.DeleteFleetJob,
-                    request_deserializer=cloud__scheduler__service__pb2.DeleteFleetJobRequest.FromString,
-                    response_serializer=cloud__scheduler__service__pb2.DeleteFleetJobResponse.SerializeToString,
-            ),
-            'GetFleetJobStats': grpc.unary_unary_rpc_method_handler(
-                    servicer.GetFleetJobStats,
-                    request_deserializer=cloud__scheduler__service__pb2.GetFleetJobStatsRequest.FromString,
-                    response_serializer=cloud__scheduler__service__pb2.GetFleetJobStatsResponse.SerializeToString,
+            'create_job': grpc.unary_unary_rpc_method_handler(
+                    servicer.create_job,
+                    request_deserializer=cloud__scheduler__service__pb2.create_job_request.FromString,
+                    response_serializer=cloud__scheduler__service__pb2.create_job_response.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
-            'ifex.cloud.scheduler.CloudSchedulerService', rpc_method_handlers)
+            'swdv.cloud_scheduler_service.create_job_service', rpc_method_handlers)
     server.add_generic_rpc_handlers((generic_handler,))
-    server.add_registered_method_handlers('ifex.cloud.scheduler.CloudSchedulerService', rpc_method_handlers)
+    server.add_registered_method_handlers('swdv.cloud_scheduler_service.create_job_service', rpc_method_handlers)
 
 
  # This class is part of an EXPERIMENTAL API.
-class CloudSchedulerService(object):
-    """=== gRPC Service Definition ===
-
-    """
+class create_job_service(object):
+    """Missing associated documentation comment in .proto file."""
 
     @staticmethod
-    def CreateJob(request,
+    def create_job(request,
             target,
             options=(),
             channel_credentials=None,
@@ -268,9 +83,9 @@ class CloudSchedulerService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/ifex.cloud.scheduler.CloudSchedulerService/CreateJob',
-            cloud__scheduler__service__pb2.CreateJobRequest.SerializeToString,
-            cloud__scheduler__service__pb2.CreateJobResponse.FromString,
+            '/swdv.cloud_scheduler_service.create_job_service/create_job',
+            cloud__scheduler__service__pb2.create_job_request.SerializeToString,
+            cloud__scheduler__service__pb2.create_job_response.FromString,
             options,
             channel_credentials,
             insecure,
@@ -281,8 +96,53 @@ class CloudSchedulerService(object):
             metadata,
             _registered_method=True)
 
+
+class update_job_serviceStub(object):
+    """Missing associated documentation comment in .proto file."""
+
+    def __init__(self, channel):
+        """Constructor.
+
+        Args:
+            channel: A grpc.Channel.
+        """
+        self.update_job = channel.unary_unary(
+                '/swdv.cloud_scheduler_service.update_job_service/update_job',
+                request_serializer=cloud__scheduler__service__pb2.update_job_request.SerializeToString,
+                response_deserializer=cloud__scheduler__service__pb2.update_job_response.FromString,
+                _registered_method=True)
+
+
+class update_job_serviceServicer(object):
+    """Missing associated documentation comment in .proto file."""
+
+    def update_job(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+
+def add_update_job_serviceServicer_to_server(servicer, server):
+    rpc_method_handlers = {
+            'update_job': grpc.unary_unary_rpc_method_handler(
+                    servicer.update_job,
+                    request_deserializer=cloud__scheduler__service__pb2.update_job_request.FromString,
+                    response_serializer=cloud__scheduler__service__pb2.update_job_response.SerializeToString,
+            ),
+    }
+    generic_handler = grpc.method_handlers_generic_handler(
+            'swdv.cloud_scheduler_service.update_job_service', rpc_method_handlers)
+    server.add_generic_rpc_handlers((generic_handler,))
+    server.add_registered_method_handlers('swdv.cloud_scheduler_service.update_job_service', rpc_method_handlers)
+
+
+ # This class is part of an EXPERIMENTAL API.
+class update_job_service(object):
+    """Missing associated documentation comment in .proto file."""
+
     @staticmethod
-    def UpdateJob(request,
+    def update_job(request,
             target,
             options=(),
             channel_credentials=None,
@@ -295,9 +155,9 @@ class CloudSchedulerService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/ifex.cloud.scheduler.CloudSchedulerService/UpdateJob',
-            cloud__scheduler__service__pb2.UpdateJobRequest.SerializeToString,
-            cloud__scheduler__service__pb2.UpdateJobResponse.FromString,
+            '/swdv.cloud_scheduler_service.update_job_service/update_job',
+            cloud__scheduler__service__pb2.update_job_request.SerializeToString,
+            cloud__scheduler__service__pb2.update_job_response.FromString,
             options,
             channel_credentials,
             insecure,
@@ -308,8 +168,53 @@ class CloudSchedulerService(object):
             metadata,
             _registered_method=True)
 
+
+class delete_job_serviceStub(object):
+    """Missing associated documentation comment in .proto file."""
+
+    def __init__(self, channel):
+        """Constructor.
+
+        Args:
+            channel: A grpc.Channel.
+        """
+        self.delete_job = channel.unary_unary(
+                '/swdv.cloud_scheduler_service.delete_job_service/delete_job',
+                request_serializer=cloud__scheduler__service__pb2.delete_job_request.SerializeToString,
+                response_deserializer=cloud__scheduler__service__pb2.delete_job_response.FromString,
+                _registered_method=True)
+
+
+class delete_job_serviceServicer(object):
+    """Missing associated documentation comment in .proto file."""
+
+    def delete_job(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+
+def add_delete_job_serviceServicer_to_server(servicer, server):
+    rpc_method_handlers = {
+            'delete_job': grpc.unary_unary_rpc_method_handler(
+                    servicer.delete_job,
+                    request_deserializer=cloud__scheduler__service__pb2.delete_job_request.FromString,
+                    response_serializer=cloud__scheduler__service__pb2.delete_job_response.SerializeToString,
+            ),
+    }
+    generic_handler = grpc.method_handlers_generic_handler(
+            'swdv.cloud_scheduler_service.delete_job_service', rpc_method_handlers)
+    server.add_generic_rpc_handlers((generic_handler,))
+    server.add_registered_method_handlers('swdv.cloud_scheduler_service.delete_job_service', rpc_method_handlers)
+
+
+ # This class is part of an EXPERIMENTAL API.
+class delete_job_service(object):
+    """Missing associated documentation comment in .proto file."""
+
     @staticmethod
-    def DeleteJob(request,
+    def delete_job(request,
             target,
             options=(),
             channel_credentials=None,
@@ -322,9 +227,9 @@ class CloudSchedulerService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/ifex.cloud.scheduler.CloudSchedulerService/DeleteJob',
-            cloud__scheduler__service__pb2.DeleteJobRequest.SerializeToString,
-            cloud__scheduler__service__pb2.DeleteJobResponse.FromString,
+            '/swdv.cloud_scheduler_service.delete_job_service/delete_job',
+            cloud__scheduler__service__pb2.delete_job_request.SerializeToString,
+            cloud__scheduler__service__pb2.delete_job_response.FromString,
             options,
             channel_credentials,
             insecure,
@@ -335,8 +240,53 @@ class CloudSchedulerService(object):
             metadata,
             _registered_method=True)
 
+
+class pause_job_serviceStub(object):
+    """Missing associated documentation comment in .proto file."""
+
+    def __init__(self, channel):
+        """Constructor.
+
+        Args:
+            channel: A grpc.Channel.
+        """
+        self.pause_job = channel.unary_unary(
+                '/swdv.cloud_scheduler_service.pause_job_service/pause_job',
+                request_serializer=cloud__scheduler__service__pb2.pause_job_request.SerializeToString,
+                response_deserializer=cloud__scheduler__service__pb2.pause_job_response.FromString,
+                _registered_method=True)
+
+
+class pause_job_serviceServicer(object):
+    """Missing associated documentation comment in .proto file."""
+
+    def pause_job(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+
+def add_pause_job_serviceServicer_to_server(servicer, server):
+    rpc_method_handlers = {
+            'pause_job': grpc.unary_unary_rpc_method_handler(
+                    servicer.pause_job,
+                    request_deserializer=cloud__scheduler__service__pb2.pause_job_request.FromString,
+                    response_serializer=cloud__scheduler__service__pb2.pause_job_response.SerializeToString,
+            ),
+    }
+    generic_handler = grpc.method_handlers_generic_handler(
+            'swdv.cloud_scheduler_service.pause_job_service', rpc_method_handlers)
+    server.add_generic_rpc_handlers((generic_handler,))
+    server.add_registered_method_handlers('swdv.cloud_scheduler_service.pause_job_service', rpc_method_handlers)
+
+
+ # This class is part of an EXPERIMENTAL API.
+class pause_job_service(object):
+    """Missing associated documentation comment in .proto file."""
+
     @staticmethod
-    def PauseJob(request,
+    def pause_job(request,
             target,
             options=(),
             channel_credentials=None,
@@ -349,9 +299,9 @@ class CloudSchedulerService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/ifex.cloud.scheduler.CloudSchedulerService/PauseJob',
-            cloud__scheduler__service__pb2.PauseJobRequest.SerializeToString,
-            cloud__scheduler__service__pb2.PauseJobResponse.FromString,
+            '/swdv.cloud_scheduler_service.pause_job_service/pause_job',
+            cloud__scheduler__service__pb2.pause_job_request.SerializeToString,
+            cloud__scheduler__service__pb2.pause_job_response.FromString,
             options,
             channel_credentials,
             insecure,
@@ -362,8 +312,53 @@ class CloudSchedulerService(object):
             metadata,
             _registered_method=True)
 
+
+class resume_job_serviceStub(object):
+    """Missing associated documentation comment in .proto file."""
+
+    def __init__(self, channel):
+        """Constructor.
+
+        Args:
+            channel: A grpc.Channel.
+        """
+        self.resume_job = channel.unary_unary(
+                '/swdv.cloud_scheduler_service.resume_job_service/resume_job',
+                request_serializer=cloud__scheduler__service__pb2.resume_job_request.SerializeToString,
+                response_deserializer=cloud__scheduler__service__pb2.resume_job_response.FromString,
+                _registered_method=True)
+
+
+class resume_job_serviceServicer(object):
+    """Missing associated documentation comment in .proto file."""
+
+    def resume_job(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+
+def add_resume_job_serviceServicer_to_server(servicer, server):
+    rpc_method_handlers = {
+            'resume_job': grpc.unary_unary_rpc_method_handler(
+                    servicer.resume_job,
+                    request_deserializer=cloud__scheduler__service__pb2.resume_job_request.FromString,
+                    response_serializer=cloud__scheduler__service__pb2.resume_job_response.SerializeToString,
+            ),
+    }
+    generic_handler = grpc.method_handlers_generic_handler(
+            'swdv.cloud_scheduler_service.resume_job_service', rpc_method_handlers)
+    server.add_generic_rpc_handlers((generic_handler,))
+    server.add_registered_method_handlers('swdv.cloud_scheduler_service.resume_job_service', rpc_method_handlers)
+
+
+ # This class is part of an EXPERIMENTAL API.
+class resume_job_service(object):
+    """Missing associated documentation comment in .proto file."""
+
     @staticmethod
-    def ResumeJob(request,
+    def resume_job(request,
             target,
             options=(),
             channel_credentials=None,
@@ -376,9 +371,9 @@ class CloudSchedulerService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/ifex.cloud.scheduler.CloudSchedulerService/ResumeJob',
-            cloud__scheduler__service__pb2.ResumeJobRequest.SerializeToString,
-            cloud__scheduler__service__pb2.ResumeJobResponse.FromString,
+            '/swdv.cloud_scheduler_service.resume_job_service/resume_job',
+            cloud__scheduler__service__pb2.resume_job_request.SerializeToString,
+            cloud__scheduler__service__pb2.resume_job_response.FromString,
             options,
             channel_credentials,
             insecure,
@@ -389,8 +384,53 @@ class CloudSchedulerService(object):
             metadata,
             _registered_method=True)
 
+
+class trigger_job_serviceStub(object):
+    """Missing associated documentation comment in .proto file."""
+
+    def __init__(self, channel):
+        """Constructor.
+
+        Args:
+            channel: A grpc.Channel.
+        """
+        self.trigger_job = channel.unary_unary(
+                '/swdv.cloud_scheduler_service.trigger_job_service/trigger_job',
+                request_serializer=cloud__scheduler__service__pb2.trigger_job_request.SerializeToString,
+                response_deserializer=cloud__scheduler__service__pb2.trigger_job_response.FromString,
+                _registered_method=True)
+
+
+class trigger_job_serviceServicer(object):
+    """Missing associated documentation comment in .proto file."""
+
+    def trigger_job(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+
+def add_trigger_job_serviceServicer_to_server(servicer, server):
+    rpc_method_handlers = {
+            'trigger_job': grpc.unary_unary_rpc_method_handler(
+                    servicer.trigger_job,
+                    request_deserializer=cloud__scheduler__service__pb2.trigger_job_request.FromString,
+                    response_serializer=cloud__scheduler__service__pb2.trigger_job_response.SerializeToString,
+            ),
+    }
+    generic_handler = grpc.method_handlers_generic_handler(
+            'swdv.cloud_scheduler_service.trigger_job_service', rpc_method_handlers)
+    server.add_generic_rpc_handlers((generic_handler,))
+    server.add_registered_method_handlers('swdv.cloud_scheduler_service.trigger_job_service', rpc_method_handlers)
+
+
+ # This class is part of an EXPERIMENTAL API.
+class trigger_job_service(object):
+    """Missing associated documentation comment in .proto file."""
+
     @staticmethod
-    def TriggerJob(request,
+    def trigger_job(request,
             target,
             options=(),
             channel_credentials=None,
@@ -403,9 +443,9 @@ class CloudSchedulerService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/ifex.cloud.scheduler.CloudSchedulerService/TriggerJob',
-            cloud__scheduler__service__pb2.TriggerJobRequest.SerializeToString,
-            cloud__scheduler__service__pb2.TriggerJobResponse.FromString,
+            '/swdv.cloud_scheduler_service.trigger_job_service/trigger_job',
+            cloud__scheduler__service__pb2.trigger_job_request.SerializeToString,
+            cloud__scheduler__service__pb2.trigger_job_response.FromString,
             options,
             channel_credentials,
             insecure,
@@ -416,8 +456,53 @@ class CloudSchedulerService(object):
             metadata,
             _registered_method=True)
 
+
+class get_job_serviceStub(object):
+    """Missing associated documentation comment in .proto file."""
+
+    def __init__(self, channel):
+        """Constructor.
+
+        Args:
+            channel: A grpc.Channel.
+        """
+        self.get_job = channel.unary_unary(
+                '/swdv.cloud_scheduler_service.get_job_service/get_job',
+                request_serializer=cloud__scheduler__service__pb2.get_job_request.SerializeToString,
+                response_deserializer=cloud__scheduler__service__pb2.get_job_response.FromString,
+                _registered_method=True)
+
+
+class get_job_serviceServicer(object):
+    """Missing associated documentation comment in .proto file."""
+
+    def get_job(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+
+def add_get_job_serviceServicer_to_server(servicer, server):
+    rpc_method_handlers = {
+            'get_job': grpc.unary_unary_rpc_method_handler(
+                    servicer.get_job,
+                    request_deserializer=cloud__scheduler__service__pb2.get_job_request.FromString,
+                    response_serializer=cloud__scheduler__service__pb2.get_job_response.SerializeToString,
+            ),
+    }
+    generic_handler = grpc.method_handlers_generic_handler(
+            'swdv.cloud_scheduler_service.get_job_service', rpc_method_handlers)
+    server.add_generic_rpc_handlers((generic_handler,))
+    server.add_registered_method_handlers('swdv.cloud_scheduler_service.get_job_service', rpc_method_handlers)
+
+
+ # This class is part of an EXPERIMENTAL API.
+class get_job_service(object):
+    """Missing associated documentation comment in .proto file."""
+
     @staticmethod
-    def GetJob(request,
+    def get_job(request,
             target,
             options=(),
             channel_credentials=None,
@@ -430,9 +515,9 @@ class CloudSchedulerService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/ifex.cloud.scheduler.CloudSchedulerService/GetJob',
-            cloud__scheduler__service__pb2.GetJobRequest.SerializeToString,
-            cloud__scheduler__service__pb2.GetJobResponse.FromString,
+            '/swdv.cloud_scheduler_service.get_job_service/get_job',
+            cloud__scheduler__service__pb2.get_job_request.SerializeToString,
+            cloud__scheduler__service__pb2.get_job_response.FromString,
             options,
             channel_credentials,
             insecure,
@@ -443,8 +528,53 @@ class CloudSchedulerService(object):
             metadata,
             _registered_method=True)
 
+
+class list_jobs_serviceStub(object):
+    """Missing associated documentation comment in .proto file."""
+
+    def __init__(self, channel):
+        """Constructor.
+
+        Args:
+            channel: A grpc.Channel.
+        """
+        self.list_jobs = channel.unary_unary(
+                '/swdv.cloud_scheduler_service.list_jobs_service/list_jobs',
+                request_serializer=cloud__scheduler__service__pb2.list_jobs_request.SerializeToString,
+                response_deserializer=cloud__scheduler__service__pb2.list_jobs_response.FromString,
+                _registered_method=True)
+
+
+class list_jobs_serviceServicer(object):
+    """Missing associated documentation comment in .proto file."""
+
+    def list_jobs(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+
+def add_list_jobs_serviceServicer_to_server(servicer, server):
+    rpc_method_handlers = {
+            'list_jobs': grpc.unary_unary_rpc_method_handler(
+                    servicer.list_jobs,
+                    request_deserializer=cloud__scheduler__service__pb2.list_jobs_request.FromString,
+                    response_serializer=cloud__scheduler__service__pb2.list_jobs_response.SerializeToString,
+            ),
+    }
+    generic_handler = grpc.method_handlers_generic_handler(
+            'swdv.cloud_scheduler_service.list_jobs_service', rpc_method_handlers)
+    server.add_generic_rpc_handlers((generic_handler,))
+    server.add_registered_method_handlers('swdv.cloud_scheduler_service.list_jobs_service', rpc_method_handlers)
+
+
+ # This class is part of an EXPERIMENTAL API.
+class list_jobs_service(object):
+    """Missing associated documentation comment in .proto file."""
+
     @staticmethod
-    def ListJobs(request,
+    def list_jobs(request,
             target,
             options=(),
             channel_credentials=None,
@@ -457,9 +587,9 @@ class CloudSchedulerService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/ifex.cloud.scheduler.CloudSchedulerService/ListJobs',
-            cloud__scheduler__service__pb2.ListJobsRequest.SerializeToString,
-            cloud__scheduler__service__pb2.ListJobsResponse.FromString,
+            '/swdv.cloud_scheduler_service.list_jobs_service/list_jobs',
+            cloud__scheduler__service__pb2.list_jobs_request.SerializeToString,
+            cloud__scheduler__service__pb2.list_jobs_response.FromString,
             options,
             channel_credentials,
             insecure,
@@ -470,8 +600,53 @@ class CloudSchedulerService(object):
             metadata,
             _registered_method=True)
 
+
+class get_job_executions_serviceStub(object):
+    """Missing associated documentation comment in .proto file."""
+
+    def __init__(self, channel):
+        """Constructor.
+
+        Args:
+            channel: A grpc.Channel.
+        """
+        self.get_job_executions = channel.unary_unary(
+                '/swdv.cloud_scheduler_service.get_job_executions_service/get_job_executions',
+                request_serializer=cloud__scheduler__service__pb2.get_job_executions_request.SerializeToString,
+                response_deserializer=cloud__scheduler__service__pb2.get_job_executions_response.FromString,
+                _registered_method=True)
+
+
+class get_job_executions_serviceServicer(object):
+    """Missing associated documentation comment in .proto file."""
+
+    def get_job_executions(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+
+def add_get_job_executions_serviceServicer_to_server(servicer, server):
+    rpc_method_handlers = {
+            'get_job_executions': grpc.unary_unary_rpc_method_handler(
+                    servicer.get_job_executions,
+                    request_deserializer=cloud__scheduler__service__pb2.get_job_executions_request.FromString,
+                    response_serializer=cloud__scheduler__service__pb2.get_job_executions_response.SerializeToString,
+            ),
+    }
+    generic_handler = grpc.method_handlers_generic_handler(
+            'swdv.cloud_scheduler_service.get_job_executions_service', rpc_method_handlers)
+    server.add_generic_rpc_handlers((generic_handler,))
+    server.add_registered_method_handlers('swdv.cloud_scheduler_service.get_job_executions_service', rpc_method_handlers)
+
+
+ # This class is part of an EXPERIMENTAL API.
+class get_job_executions_service(object):
+    """Missing associated documentation comment in .proto file."""
+
     @staticmethod
-    def GetJobExecutions(request,
+    def get_job_executions(request,
             target,
             options=(),
             channel_credentials=None,
@@ -484,9 +659,9 @@ class CloudSchedulerService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/ifex.cloud.scheduler.CloudSchedulerService/GetJobExecutions',
-            cloud__scheduler__service__pb2.GetJobExecutionsRequest.SerializeToString,
-            cloud__scheduler__service__pb2.GetJobExecutionsResponse.FromString,
+            '/swdv.cloud_scheduler_service.get_job_executions_service/get_job_executions',
+            cloud__scheduler__service__pb2.get_job_executions_request.SerializeToString,
+            cloud__scheduler__service__pb2.get_job_executions_response.FromString,
             options,
             channel_credentials,
             insecure,
@@ -497,8 +672,53 @@ class CloudSchedulerService(object):
             metadata,
             _registered_method=True)
 
+
+class create_fleet_job_serviceStub(object):
+    """Missing associated documentation comment in .proto file."""
+
+    def __init__(self, channel):
+        """Constructor.
+
+        Args:
+            channel: A grpc.Channel.
+        """
+        self.create_fleet_job = channel.unary_unary(
+                '/swdv.cloud_scheduler_service.create_fleet_job_service/create_fleet_job',
+                request_serializer=cloud__scheduler__service__pb2.create_fleet_job_request.SerializeToString,
+                response_deserializer=cloud__scheduler__service__pb2.create_fleet_job_response.FromString,
+                _registered_method=True)
+
+
+class create_fleet_job_serviceServicer(object):
+    """Missing associated documentation comment in .proto file."""
+
+    def create_fleet_job(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+
+def add_create_fleet_job_serviceServicer_to_server(servicer, server):
+    rpc_method_handlers = {
+            'create_fleet_job': grpc.unary_unary_rpc_method_handler(
+                    servicer.create_fleet_job,
+                    request_deserializer=cloud__scheduler__service__pb2.create_fleet_job_request.FromString,
+                    response_serializer=cloud__scheduler__service__pb2.create_fleet_job_response.SerializeToString,
+            ),
+    }
+    generic_handler = grpc.method_handlers_generic_handler(
+            'swdv.cloud_scheduler_service.create_fleet_job_service', rpc_method_handlers)
+    server.add_generic_rpc_handlers((generic_handler,))
+    server.add_registered_method_handlers('swdv.cloud_scheduler_service.create_fleet_job_service', rpc_method_handlers)
+
+
+ # This class is part of an EXPERIMENTAL API.
+class create_fleet_job_service(object):
+    """Missing associated documentation comment in .proto file."""
+
     @staticmethod
-    def CreateFleetJob(request,
+    def create_fleet_job(request,
             target,
             options=(),
             channel_credentials=None,
@@ -511,9 +731,9 @@ class CloudSchedulerService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/ifex.cloud.scheduler.CloudSchedulerService/CreateFleetJob',
-            cloud__scheduler__service__pb2.CreateFleetJobRequest.SerializeToString,
-            cloud__scheduler__service__pb2.CreateFleetJobResponse.FromString,
+            '/swdv.cloud_scheduler_service.create_fleet_job_service/create_fleet_job',
+            cloud__scheduler__service__pb2.create_fleet_job_request.SerializeToString,
+            cloud__scheduler__service__pb2.create_fleet_job_response.FromString,
             options,
             channel_credentials,
             insecure,
@@ -524,8 +744,53 @@ class CloudSchedulerService(object):
             metadata,
             _registered_method=True)
 
+
+class delete_fleet_job_serviceStub(object):
+    """Missing associated documentation comment in .proto file."""
+
+    def __init__(self, channel):
+        """Constructor.
+
+        Args:
+            channel: A grpc.Channel.
+        """
+        self.delete_fleet_job = channel.unary_unary(
+                '/swdv.cloud_scheduler_service.delete_fleet_job_service/delete_fleet_job',
+                request_serializer=cloud__scheduler__service__pb2.delete_fleet_job_request.SerializeToString,
+                response_deserializer=cloud__scheduler__service__pb2.delete_fleet_job_response.FromString,
+                _registered_method=True)
+
+
+class delete_fleet_job_serviceServicer(object):
+    """Missing associated documentation comment in .proto file."""
+
+    def delete_fleet_job(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+
+def add_delete_fleet_job_serviceServicer_to_server(servicer, server):
+    rpc_method_handlers = {
+            'delete_fleet_job': grpc.unary_unary_rpc_method_handler(
+                    servicer.delete_fleet_job,
+                    request_deserializer=cloud__scheduler__service__pb2.delete_fleet_job_request.FromString,
+                    response_serializer=cloud__scheduler__service__pb2.delete_fleet_job_response.SerializeToString,
+            ),
+    }
+    generic_handler = grpc.method_handlers_generic_handler(
+            'swdv.cloud_scheduler_service.delete_fleet_job_service', rpc_method_handlers)
+    server.add_generic_rpc_handlers((generic_handler,))
+    server.add_registered_method_handlers('swdv.cloud_scheduler_service.delete_fleet_job_service', rpc_method_handlers)
+
+
+ # This class is part of an EXPERIMENTAL API.
+class delete_fleet_job_service(object):
+    """Missing associated documentation comment in .proto file."""
+
     @staticmethod
-    def DeleteFleetJob(request,
+    def delete_fleet_job(request,
             target,
             options=(),
             channel_credentials=None,
@@ -538,9 +803,9 @@ class CloudSchedulerService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/ifex.cloud.scheduler.CloudSchedulerService/DeleteFleetJob',
-            cloud__scheduler__service__pb2.DeleteFleetJobRequest.SerializeToString,
-            cloud__scheduler__service__pb2.DeleteFleetJobResponse.FromString,
+            '/swdv.cloud_scheduler_service.delete_fleet_job_service/delete_fleet_job',
+            cloud__scheduler__service__pb2.delete_fleet_job_request.SerializeToString,
+            cloud__scheduler__service__pb2.delete_fleet_job_response.FromString,
             options,
             channel_credentials,
             insecure,
@@ -551,8 +816,53 @@ class CloudSchedulerService(object):
             metadata,
             _registered_method=True)
 
+
+class get_fleet_job_stats_serviceStub(object):
+    """Missing associated documentation comment in .proto file."""
+
+    def __init__(self, channel):
+        """Constructor.
+
+        Args:
+            channel: A grpc.Channel.
+        """
+        self.get_fleet_job_stats = channel.unary_unary(
+                '/swdv.cloud_scheduler_service.get_fleet_job_stats_service/get_fleet_job_stats',
+                request_serializer=cloud__scheduler__service__pb2.get_fleet_job_stats_request.SerializeToString,
+                response_deserializer=cloud__scheduler__service__pb2.get_fleet_job_stats_response.FromString,
+                _registered_method=True)
+
+
+class get_fleet_job_stats_serviceServicer(object):
+    """Missing associated documentation comment in .proto file."""
+
+    def get_fleet_job_stats(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+
+def add_get_fleet_job_stats_serviceServicer_to_server(servicer, server):
+    rpc_method_handlers = {
+            'get_fleet_job_stats': grpc.unary_unary_rpc_method_handler(
+                    servicer.get_fleet_job_stats,
+                    request_deserializer=cloud__scheduler__service__pb2.get_fleet_job_stats_request.FromString,
+                    response_serializer=cloud__scheduler__service__pb2.get_fleet_job_stats_response.SerializeToString,
+            ),
+    }
+    generic_handler = grpc.method_handlers_generic_handler(
+            'swdv.cloud_scheduler_service.get_fleet_job_stats_service', rpc_method_handlers)
+    server.add_generic_rpc_handlers((generic_handler,))
+    server.add_registered_method_handlers('swdv.cloud_scheduler_service.get_fleet_job_stats_service', rpc_method_handlers)
+
+
+ # This class is part of an EXPERIMENTAL API.
+class get_fleet_job_stats_service(object):
+    """Missing associated documentation comment in .proto file."""
+
     @staticmethod
-    def GetFleetJobStats(request,
+    def get_fleet_job_stats(request,
             target,
             options=(),
             channel_credentials=None,
@@ -565,9 +875,81 @@ class CloudSchedulerService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/ifex.cloud.scheduler.CloudSchedulerService/GetFleetJobStats',
-            cloud__scheduler__service__pb2.GetFleetJobStatsRequest.SerializeToString,
-            cloud__scheduler__service__pb2.GetFleetJobStatsResponse.FromString,
+            '/swdv.cloud_scheduler_service.get_fleet_job_stats_service/get_fleet_job_stats',
+            cloud__scheduler__service__pb2.get_fleet_job_stats_request.SerializeToString,
+            cloud__scheduler__service__pb2.get_fleet_job_stats_response.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+
+class healthy_serviceStub(object):
+    """Missing associated documentation comment in .proto file."""
+
+    def __init__(self, channel):
+        """Constructor.
+
+        Args:
+            channel: A grpc.Channel.
+        """
+        self.healthy = channel.unary_unary(
+                '/swdv.cloud_scheduler_service.healthy_service/healthy',
+                request_serializer=cloud__scheduler__service__pb2.healthy_request.SerializeToString,
+                response_deserializer=cloud__scheduler__service__pb2.healthy_response.FromString,
+                _registered_method=True)
+
+
+class healthy_serviceServicer(object):
+    """Missing associated documentation comment in .proto file."""
+
+    def healthy(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+
+def add_healthy_serviceServicer_to_server(servicer, server):
+    rpc_method_handlers = {
+            'healthy': grpc.unary_unary_rpc_method_handler(
+                    servicer.healthy,
+                    request_deserializer=cloud__scheduler__service__pb2.healthy_request.FromString,
+                    response_serializer=cloud__scheduler__service__pb2.healthy_response.SerializeToString,
+            ),
+    }
+    generic_handler = grpc.method_handlers_generic_handler(
+            'swdv.cloud_scheduler_service.healthy_service', rpc_method_handlers)
+    server.add_generic_rpc_handlers((generic_handler,))
+    server.add_registered_method_handlers('swdv.cloud_scheduler_service.healthy_service', rpc_method_handlers)
+
+
+ # This class is part of an EXPERIMENTAL API.
+class healthy_service(object):
+    """Missing associated documentation comment in .proto file."""
+
+    @staticmethod
+    def healthy(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/swdv.cloud_scheduler_service.healthy_service/healthy',
+            cloud__scheduler__service__pb2.healthy_request.SerializeToString,
+            cloud__scheduler__service__pb2.healthy_response.FromString,
             options,
             channel_credentials,
             insecure,

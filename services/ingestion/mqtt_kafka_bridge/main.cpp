@@ -255,13 +255,12 @@ int main(int argc, char* argv[]) {
     router.set_require_context(FLAGS_require_vehicle_context);
 
     // Register v2c handlers for each content_id (vehicle-to-cloud)
-    // RPC and scheduler messages are transformed to offboard format with vehicle_id
-    // Discovery messages use passthrough (hash-based protocol includes vehicle_id)
+    // RPC messages are transformed to offboard format with vehicle_id
+    // Discovery and scheduler use passthrough (v2 protocol includes vehicle_id)
     router.register_handler(200, FLAGS_kafka_topic_rpc,
                             make_rpc_transform(FLAGS_bridge_id));
     router.register_handler(201, FLAGS_kafka_topic_discovery, nullptr);  // Passthrough
-    router.register_handler(202, FLAGS_kafka_topic_scheduler,
-                            make_scheduler_transform(FLAGS_bridge_id));
+    router.register_handler(202, FLAGS_kafka_topic_scheduler, nullptr);  // Passthrough (v2 protocol)
 
     LOG(INFO) << "Registered v2c handlers (MQTT -> Kafka):";
     LOG(INFO) << "  v2c/*/200 -> " << FLAGS_kafka_topic_rpc;

@@ -52,9 +52,11 @@ target_include_directories(scheduler_e2e_test PRIVATE
     ${CMAKE_SOURCE_DIR}/services/cloud_scheduler
     ${CMAKE_SOURCE_DIR}/libs/envelope_codec/include
     ${CMAKE_SOURCE_DIR}/libs/postgres_client/include
+    ${CMAKE_SOURCE_DIR}/libs/offboard-platform/include
+    ${CMAKE_BINARY_DIR}/libs/offboard-platform  # IFEX-generated protos
 )
 target_link_libraries(scheduler_e2e_test PRIVATE
-    ifex_offboard_proto
+    offboard_platform
     envelope_codec
     postgres_client
     e2e_test_fixture
@@ -107,9 +109,11 @@ add_executable(discovery_e2e_test
 target_include_directories(discovery_e2e_test PRIVATE
     ${CMAKE_SOURCE_DIR}/services/api/discovery
     ${CMAKE_SOURCE_DIR}/libs/postgres_client/include
+    ${CMAKE_SOURCE_DIR}/libs/offboard-platform/include
+    ${CMAKE_BINARY_DIR}/libs/offboard-platform  # IFEX-generated protos
 )
 target_link_libraries(discovery_e2e_test PRIVATE
-    ifex_offboard_proto
+    offboard_platform
     postgres_client
     e2e_test_fixture
     GTest::gtest
@@ -134,10 +138,12 @@ target_include_directories(dispatcher_e2e_test PRIVATE
     ${CMAKE_SOURCE_DIR}/services/api/dispatcher
     ${CMAKE_SOURCE_DIR}/libs/envelope_codec/include
     ${CMAKE_SOURCE_DIR}/libs/postgres_client/include
+    ${CMAKE_SOURCE_DIR}/libs/offboard-platform/include
+    ${CMAKE_BINARY_DIR}/libs/offboard-platform  # IFEX-generated protos
     ${RDKAFKA_INCLUDE_DIRS}
 )
 target_link_libraries(dispatcher_e2e_test PRIVATE
-    ifex_offboard_proto
+    offboard_platform
     envelope_codec
     postgres_client
     e2e_test_fixture
@@ -153,3 +159,24 @@ target_link_libraries(dispatcher_e2e_test PRIVATE
 # Instead, run as single binary to share the fixture
 add_test(NAME dispatcher_e2e COMMAND dispatcher_e2e_test)
 set_tests_properties(dispatcher_e2e PROPERTIES LABELS "e2e;docker")
+
+# =============================================================================
+# Transport Server Integration Tests
+# =============================================================================
+# Tests CloudBackendTransportServer gRPC interface
+# Requires Kafka broker running
+add_executable(transport_server_test
+    integration/transport_server_test.cpp
+)
+target_include_directories(transport_server_test PRIVATE
+    ${CMAKE_SOURCE_DIR}/libs/offboard-platform/include
+    ${CMAKE_BINARY_DIR}/libs/offboard-platform  # For generated proto headers
+)
+target_link_libraries(transport_server_test PRIVATE
+    offboard_platform
+    GTest::gtest
+    glog::glog
+    grpc++
+)
+add_test(NAME transport_server_test COMMAND transport_server_test)
+set_tests_properties(transport_server_test PROPERTIES LABELS "unit")

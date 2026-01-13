@@ -1,0 +1,312 @@
+---
+name: cloud_discovery_service
+major_version: 1
+minor_version: 0
+description: >
+  Cloud-side fleet discovery service for querying vehicle service registries.
+  Provides aggregated service data from PostgreSQL, populated via the
+  discovery sync protocol (content_id=201).
+
+namespaces:
+  - name: discovery
+    description: Cloud discovery operations for fleet service queries
+
+    structs:
+      - name: service_info_t
+        description: Information about a registered service
+        members:
+          - name: schema_hash
+            datatype: string
+            description: SHA-256 hash of IFEX schema
+          - name: service_name
+            datatype: string
+          - name: version
+            datatype: string
+          - name: ifex_schema
+            datatype: string
+            description: Full IFEX YAML (optional for detailed queries)
+            mandatory: false
+          - name: methods_json
+            datatype: string
+            description: Pre-parsed methods as JSON
+            mandatory: false
+          - name: structs_json
+            datatype: string
+            description: Pre-parsed struct definitions
+            mandatory: false
+          - name: enums_json
+            datatype: string
+            description: Pre-parsed enum definitions
+            mandatory: false
+          - name: first_seen_ms
+            datatype: uint64
+            description: When first reported
+          - name: last_seen_ms
+            datatype: uint64
+            description: Last time any vehicle reported this schema
+
+      - name: vehicle_summary_t
+        description: Summary information about a vehicle
+        members:
+          - name: vehicle_id
+            datatype: string
+          - name: fleet_id
+            datatype: string
+            mandatory: false
+          - name: region
+            datatype: string
+            mandatory: false
+          - name: model
+            datatype: string
+            mandatory: false
+          - name: year
+            datatype: int32
+            mandatory: false
+          - name: owner
+            datatype: string
+            description: Vehicle owner from enrichment
+            mandatory: false
+          - name: service_count
+            datatype: int32
+          - name: job_count
+            datatype: int32
+          - name: last_seen_ms
+            datatype: uint64
+          - name: is_online
+            datatype: boolean
+          - name: created_at_ms
+            datatype: uint64
+            description: When vehicle was first registered
+            mandatory: false
+          - name: updated_at_ms
+            datatype: uint64
+            description: When vehicle was last updated
+            mandatory: false
+
+      - name: service_location_t
+        description: Service registered on a specific vehicle
+        members:
+          - name: vehicle_id
+            datatype: string
+          - name: fleet_id
+            datatype: string
+            mandatory: false
+          - name: region
+            datatype: string
+            mandatory: false
+          - name: service
+            datatype: service_info_t
+
+      - name: service_stats_t
+        description: Fleet-wide statistics for a service
+        members:
+          - name: service_name
+            datatype: string
+          - name: vehicle_count
+            datatype: int32
+            description: How many vehicles have this service
+          - name: available_count
+            datatype: int32
+            description: How many are currently online
+
+      - name: list_vehicles_filter_t
+        description: Filters for listing vehicles
+        members:
+          - name: vehicle_id_pattern
+            datatype: string
+            description: Case-insensitive pattern match for vehicle_id (e.g., "VIN001*")
+            mandatory: false
+          - name: fleet_id_filter
+            datatype: string
+            mandatory: false
+          - name: region_filter
+            datatype: string
+            mandatory: false
+          - name: online_only
+            datatype: boolean
+            mandatory: false
+          - name: with_services_only
+            datatype: boolean
+            mandatory: false
+          - name: page_size
+            datatype: int32
+            mandatory: false
+          - name: page_token
+            datatype: string
+            mandatory: false
+
+      - name: list_vehicles_response_t
+        description: List of vehicles
+        members:
+          - name: vehicles
+            datatype: vehicle_summary_t[]
+          - name: next_page_token
+            datatype: string
+            mandatory: false
+          - name: total_count
+            datatype: int32
+
+      - name: get_vehicle_services_response_t
+        description: Services registered on a vehicle
+        members:
+          - name: vehicle_id
+            datatype: string
+          - name: fleet_id
+            datatype: string
+            mandatory: false
+          - name: region
+            datatype: string
+            mandatory: false
+          - name: services
+            datatype: service_info_t[]
+          - name: last_sync_ms
+            datatype: uint64
+
+      - name: query_services_filter_t
+        description: Filters for querying services by name
+        members:
+          - name: service_name_pattern
+            datatype: string
+            description: Supports wildcards (e.g., "climate*", "*_service")
+          - name: fleet_id_filter
+            datatype: string
+            mandatory: false
+          - name: region_filter
+            datatype: string
+            mandatory: false
+          - name: available_only
+            datatype: boolean
+            mandatory: false
+          - name: page_size
+            datatype: int32
+            mandatory: false
+          - name: page_token
+            datatype: string
+            mandatory: false
+
+      - name: query_services_response_t
+        description: Services matching the query
+        members:
+          - name: locations
+            datatype: service_location_t[]
+          - name: next_page_token
+            datatype: string
+            mandatory: false
+          - name: total_count
+            datatype: int32
+
+      - name: fleet_stats_filter_t
+        description: Filters for fleet statistics
+        members:
+          - name: fleet_id_filter
+            datatype: string
+            mandatory: false
+          - name: region_filter
+            datatype: string
+            mandatory: false
+
+      - name: fleet_stats_response_t
+        description: Fleet-wide service statistics
+        members:
+          - name: stats
+            datatype: service_stats_t[]
+          - name: total_vehicles
+            datatype: int32
+          - name: online_vehicles
+            datatype: int32
+          - name: total_services
+            datatype: int32
+
+      - name: find_vehicles_filter_t
+        description: Filters for finding vehicles with a specific service
+        members:
+          - name: service_name
+            datatype: string
+            description: Exact service name
+          - name: method_name
+            datatype: string
+            description: Optional - must have this method
+            mandatory: false
+          - name: fleet_id_filter
+            datatype: string
+            mandatory: false
+          - name: region_filter
+            datatype: string
+            mandatory: false
+          - name: available_only
+            datatype: boolean
+            mandatory: false
+          - name: page_size
+            datatype: int32
+            mandatory: false
+          - name: page_token
+            datatype: string
+            mandatory: false
+
+      - name: find_vehicles_response_t
+        description: Vehicles with the requested service
+        members:
+          - name: vehicles
+            datatype: vehicle_summary_t[]
+          - name: next_page_token
+            datatype: string
+            mandatory: false
+          - name: total_count
+            datatype: int32
+
+    methods:
+      - name: list_vehicles
+        description: List all vehicles with summary info
+        input:
+          - name: filter
+            datatype: list_vehicles_filter_t
+            mandatory: false
+        output:
+          - name: result
+            datatype: list_vehicles_response_t
+
+      - name: get_vehicle_services
+        description: Get detailed services for a specific vehicle
+        input:
+          - name: vehicle_id
+            datatype: string
+            mandatory: true
+        output:
+          - name: result
+            datatype: get_vehicle_services_response_t
+
+      - name: query_services_by_name
+        description: Query services across fleet by name pattern
+        input:
+          - name: filter
+            datatype: query_services_filter_t
+            mandatory: true
+        output:
+          - name: result
+            datatype: query_services_response_t
+
+      - name: get_fleet_service_stats
+        description: Get fleet-wide service statistics
+        input:
+          - name: filter
+            datatype: fleet_stats_filter_t
+            mandatory: false
+        output:
+          - name: result
+            datatype: fleet_stats_response_t
+
+      - name: find_vehicles_with_service
+        description: Find all vehicles that have a specific service
+        input:
+          - name: filter
+            datatype: find_vehicles_filter_t
+            mandatory: true
+        output:
+          - name: result
+            datatype: find_vehicles_response_t
+
+      - name: healthy
+        description: Check if discovery service is ready
+        output:
+          - name: is_healthy
+            datatype: boolean

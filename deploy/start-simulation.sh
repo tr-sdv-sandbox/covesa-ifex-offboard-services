@@ -61,7 +61,7 @@ log_info "VIN Pattern: ${VIN_PREFIX}00000000000001 - ${VIN_PREFIX}$(printf '%014
 if ! docker image inspect "$VEHICLE_IMAGE" >/dev/null 2>&1; then
     log_warn "Vehicle image not found: $VEHICLE_IMAGE"
     log_warn "Build it from covesa-ifex-core:"
-    log_warn "  cd ../covesa-ifex-core && ./deploy/build-image.sh"
+    log_warn "  cd ../../covesa-ifex-core && ./deploy/build-image.sh"
     exit 1
 fi
 

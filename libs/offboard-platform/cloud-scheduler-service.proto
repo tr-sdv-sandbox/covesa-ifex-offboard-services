@@ -1,0 +1,401 @@
+// Generated from cloud_scheduler_service.ifex by covesa-ifex-core
+// DO NOT EDIT - regenerate with: ./generate_proto.sh
+syntax = "proto3";
+
+
+
+package swdv.cloud_scheduler_service;
+
+// Namespace: scheduler
+// Cloud scheduler operations for fleet job management
+
+// Status of a scheduled job
+enum cloud_job_status_t {
+  JOB_UNKNOWN = 0;
+  JOB_PENDING = 1;
+  JOB_SCHEDULED = 2;
+  JOB_RUNNING = 3;
+  JOB_COMPLETED = 4;
+  JOB_FAILED = 5;
+  JOB_CANCELLED = 6;
+  JOB_PAUSED = 7;
+}
+
+// Synchronization state between cloud and vehicle
+enum sync_state_t {
+  SYNC_UNKNOWN = 0;
+  SYNC_PENDING = 1;
+  SYNC_CONFIRMED = 2;
+  SYNC_FAILED = 3;
+  SYNC_OUT_OF_SYNC = 4;
+}
+
+// Full job information
+message job_info_t {
+  string vehicle_id = 1;
+  string fleet_id = 2;
+  string region = 3;
+  string job_id = 4;
+  string title = 5;
+  string service = 6;
+  string method = 7;
+  string parameters_json = 8;
+  cloud_job_status_t status = 9;
+  uint64 scheduled_time_ms = 10;
+  string recurrence_rule = 11;
+  uint64 next_run_time_ms = 12;
+  uint64 created_at_ms = 13;
+  uint64 updated_at_ms = 14;
+  string created_by = 15;
+  sync_state_t sync_state = 16;
+  uint64 synced_at_ms = 17;
+}
+
+// Job execution record
+message execution_info_t {
+  string execution_id = 1;
+  cloud_job_status_t status = 2;
+  uint64 executed_at_ms = 3;
+  uint32 duration_ms = 4;
+  string result_json = 5;
+  string error_message = 6;
+  uint64 next_run_time_ms = 7;
+}
+
+// Request to create a new scheduled job
+message create_job_request_t {
+  string vehicle_id = 1;
+  string title = 2;
+  string service = 3;
+  string method = 4;
+  string parameters_json = 5;
+  uint64 scheduled_time_ms = 6;
+  string recurrence_rule = 7;
+  uint64 end_time_ms = 8;
+  string created_by = 9;
+}
+
+// Result of job creation
+message create_job_response_t {
+  bool success = 1;
+  string job_id = 2;
+  string error_message = 3;
+}
+
+// Request to update a job (partial update)
+message update_job_request_t {
+  string vehicle_id = 1;
+  string job_id = 2;
+  string title = 3;
+  uint64 scheduled_time_ms = 4;
+  string recurrence_rule = 5;
+  string parameters_json = 6;
+  uint64 end_time_ms = 7;
+}
+
+// Simple success/error response
+message simple_response_t {
+  bool success = 1;
+  string error_message = 2;
+}
+
+// Response for get job request
+message get_job_response_t {
+  bool found = 1;
+  job_info_t job = 2;
+}
+
+// Filters for listing jobs
+message list_jobs_filter_t {
+  string vehicle_id_filter = 1;
+  string fleet_id_filter = 2;
+  string region_filter = 3;
+  string service_filter = 4;
+  cloud_job_status_t status_filter = 5;
+  string created_by_filter = 6;
+  bool recurring_only = 7;
+  sint32 page_size = 8;
+  string page_token = 9;
+}
+
+// List of jobs
+message list_jobs_response_t {
+  repeated job_info_t jobs = 1;
+  string next_page_token = 2;
+  sint32 total_count = 3;
+}
+
+// Request for job execution history
+message get_job_executions_request_t {
+  string vehicle_id = 1;
+  string job_id = 2;
+  sint32 limit = 3;
+  uint64 since_ms = 4;
+}
+
+// Job execution history
+message get_job_executions_response_t {
+  string vehicle_id = 1;
+  string job_id = 2;
+  repeated execution_info_t executions = 3;
+  sint32 total_count = 4;
+}
+
+// Create same job on multiple vehicles
+message create_fleet_job_request_t {
+  repeated string vehicle_ids = 1;
+  string fleet_id = 2;
+  string region = 3;
+  string service_filter = 4;
+  string title = 5;
+  string service = 6;
+  string method = 7;
+  string parameters_json = 8;
+  uint64 scheduled_time_ms = 9;
+  string recurrence_rule = 10;
+  uint64 end_time_ms = 11;
+  string created_by = 12;
+}
+
+// Result for one vehicle in fleet job creation
+message fleet_job_result_t {
+  string vehicle_id = 1;
+  bool success = 2;
+  string job_id = 3;
+  string error_message = 4;
+}
+
+// Aggregate fleet job creation result
+message create_fleet_job_response_t {
+  sint32 total_vehicles = 1;
+  sint32 successful = 2;
+  sint32 failed = 3;
+  repeated fleet_job_result_t results = 4;
+  string fleet_job_id = 5;
+}
+
+// Delete jobs from multiple vehicles
+message delete_fleet_job_request_t {
+  repeated string vehicle_ids = 1;
+  repeated string job_ids = 2;
+}
+
+// Fleet job deletion result
+message delete_fleet_job_response_t {
+  sint32 total_deletions = 1;
+  sint32 successful = 2;
+  sint32 failed = 3;
+}
+
+// Filters for fleet job statistics
+message fleet_job_stats_filter_t {
+  string fleet_id_filter = 1;
+  string region_filter = 2;
+}
+
+// Statistics for a service/method combination
+message job_stats_t {
+  string service = 1;
+  string method = 2;
+  sint32 total_jobs = 3;
+  sint32 pending = 4;
+  sint32 running = 5;
+  sint32 completed = 6;
+  sint32 failed = 7;
+  sint32 recurring = 8;
+}
+
+// Fleet-wide job statistics
+message fleet_job_stats_response_t {
+  sint32 total_jobs = 1;
+  sint32 total_vehicles_with_jobs = 2;
+  repeated job_stats_t by_service_method = 3;
+}
+
+// Method: create_job
+// Create a new scheduled job on a vehicle
+message create_job_request {
+  create_job_request_t request = 1;
+}
+
+message create_job_response {
+  create_job_response_t result = 1;
+}
+
+service create_job_service {
+  rpc create_job(create_job_request) returns (create_job_response);
+}
+
+// Method: update_job
+// Update an existing job (partial update)
+message update_job_request {
+  update_job_request_t request = 1;
+}
+
+message update_job_response {
+  simple_response_t result = 1;
+}
+
+service update_job_service {
+  rpc update_job(update_job_request) returns (update_job_response);
+}
+
+// Method: delete_job
+// Delete a job
+message delete_job_request {
+  string vehicle_id = 1;
+  string job_id = 2;
+}
+
+message delete_job_response {
+  simple_response_t result = 1;
+}
+
+service delete_job_service {
+  rpc delete_job(delete_job_request) returns (delete_job_response);
+}
+
+// Method: pause_job
+// Pause a job (stop scheduling)
+message pause_job_request {
+  string vehicle_id = 1;
+  string job_id = 2;
+}
+
+message pause_job_response {
+  simple_response_t result = 1;
+}
+
+service pause_job_service {
+  rpc pause_job(pause_job_request) returns (pause_job_response);
+}
+
+// Method: resume_job
+// Resume a paused job
+message resume_job_request {
+  string vehicle_id = 1;
+  string job_id = 2;
+}
+
+message resume_job_response {
+  simple_response_t result = 1;
+}
+
+service resume_job_service {
+  rpc resume_job(resume_job_request) returns (resume_job_response);
+}
+
+// Method: trigger_job
+// Trigger immediate job execution
+message trigger_job_request {
+  string vehicle_id = 1;
+  string job_id = 2;
+}
+
+message trigger_job_response {
+  simple_response_t result = 1;
+}
+
+service trigger_job_service {
+  rpc trigger_job(trigger_job_request) returns (trigger_job_response);
+}
+
+// Method: get_job
+// Get detailed job information
+message get_job_request {
+  string vehicle_id = 1;
+  string job_id = 2;
+}
+
+message get_job_response {
+  get_job_response_t result = 1;
+}
+
+service get_job_service {
+  rpc get_job(get_job_request) returns (get_job_response);
+}
+
+// Method: list_jobs
+// List jobs with optional filtering
+message list_jobs_request {
+  list_jobs_filter_t filter = 1;
+}
+
+message list_jobs_response {
+  list_jobs_response_t result = 1;
+}
+
+service list_jobs_service {
+  rpc list_jobs(list_jobs_request) returns (list_jobs_response);
+}
+
+// Method: get_job_executions
+// Get job execution history
+message get_job_executions_request {
+  get_job_executions_request_t request = 1;
+}
+
+message get_job_executions_response {
+  get_job_executions_response_t result = 1;
+}
+
+service get_job_executions_service {
+  rpc get_job_executions(get_job_executions_request) returns (get_job_executions_response);
+}
+
+// Method: create_fleet_job
+// Create same job on multiple vehicles
+message create_fleet_job_request {
+  create_fleet_job_request_t request = 1;
+}
+
+message create_fleet_job_response {
+  create_fleet_job_response_t result = 1;
+}
+
+service create_fleet_job_service {
+  rpc create_fleet_job(create_fleet_job_request) returns (create_fleet_job_response);
+}
+
+// Method: delete_fleet_job
+// Delete jobs from multiple vehicles
+message delete_fleet_job_request {
+  delete_fleet_job_request_t request = 1;
+}
+
+message delete_fleet_job_response {
+  delete_fleet_job_response_t result = 1;
+}
+
+service delete_fleet_job_service {
+  rpc delete_fleet_job(delete_fleet_job_request) returns (delete_fleet_job_response);
+}
+
+// Method: get_fleet_job_stats
+// Get fleet-wide job statistics
+message get_fleet_job_stats_request {
+  fleet_job_stats_filter_t filter = 1;
+}
+
+message get_fleet_job_stats_response {
+  fleet_job_stats_response_t result = 1;
+}
+
+service get_fleet_job_stats_service {
+  rpc get_fleet_job_stats(get_fleet_job_stats_request) returns (get_fleet_job_stats_response);
+}
+
+// Method: healthy
+// Check if scheduler service is ready
+message healthy_request {
+}
+
+message healthy_response {
+  bool is_healthy = 1;
+}
+
+service healthy_service {
+  rpc healthy(healthy_request) returns (healthy_response);
+}
+
+

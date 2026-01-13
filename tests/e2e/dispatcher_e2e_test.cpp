@@ -36,7 +36,8 @@
 #include "rpc_offboard_codec.hpp"
 #include "dispatcher-rpc-envelope.pb.h"
 
-using namespace ifex::cloud::dispatcher;
+// IFEX-based types namespace
+namespace proto = swdv::cloud_dispatcher_service;
 
 /// Get directory containing the current executable
 std::string GetExecutableDir() {
@@ -72,7 +73,14 @@ static const char* REGION = "eu-west-1";
 
 class DispatcherE2ETest : public ::testing::Test {
 protected:
-    static std::unique_ptr<CloudDispatcherService::Stub> stub_;
+    // IFEX-based stubs (one per method)
+    static std::unique_ptr<proto::call_method_service::Stub> call_method_stub_;
+    static std::unique_ptr<proto::call_method_async_service::Stub> call_method_async_stub_;
+    static std::unique_ptr<proto::call_fleet_method_service::Stub> call_fleet_method_stub_;
+    static std::unique_ptr<proto::get_rpc_status_service::Stub> get_rpc_status_stub_;
+    static std::unique_ptr<proto::cancel_rpc_service::Stub> cancel_rpc_stub_;
+    static std::unique_ptr<proto::list_rpc_requests_service::Stub> list_rpc_requests_stub_;
+    static std::unique_ptr<proto::healthy_service::Stub> healthy_stub_;
     static std::shared_ptr<grpc::Channel> channel_;
     static pid_t dispatcher_api_pid_;
     static std::unique_ptr<ifex::offboard::PostgresClient> db_;
@@ -213,7 +221,15 @@ protected:
         // Connect gRPC client
         std::string target = std::string(DISPATCHER_API_HOST) + ":" + std::to_string(DISPATCHER_API_PORT);
         channel_ = grpc::CreateChannel(target, grpc::InsecureChannelCredentials());
-        stub_ = CloudDispatcherService::NewStub(channel_);
+
+        // Create all IFEX stubs (one per method)
+        call_method_stub_ = proto::call_method_service::NewStub(channel_);
+        call_method_async_stub_ = proto::call_method_async_service::NewStub(channel_);
+        call_fleet_method_stub_ = proto::call_fleet_method_service::NewStub(channel_);
+        get_rpc_status_stub_ = proto::get_rpc_status_service::NewStub(channel_);
+        cancel_rpc_stub_ = proto::cancel_rpc_service::NewStub(channel_);
+        list_rpc_requests_stub_ = proto::list_rpc_requests_service::NewStub(channel_);
+        healthy_stub_ = proto::healthy_service::NewStub(channel_);
 
         // Wait for connection
         auto deadline = std::chrono::system_clock::now() + std::chrono::seconds(5);
@@ -226,7 +242,13 @@ protected:
 
     static void TearDownTestSuite() {
         // Close gRPC connection first to avoid shutdown delay
-        stub_.reset();
+        call_method_stub_.reset();
+        call_method_async_stub_.reset();
+        call_fleet_method_stub_.reset();
+        get_rpc_status_stub_.reset();
+        cancel_rpc_stub_.reset();
+        list_rpc_requests_stub_.reset();
+        healthy_stub_.reset();
         channel_.reset();
 
         // Stop dispatcher_api
@@ -252,56 +274,18 @@ protected:
     }
 
     void SetUp() override {
-        ASSERT_TRUE(stub_ != nullptr) << "gRPC stub not initialized";
-    }
-
-    // Helper to send a simulated vehicle response via Kafka
-    bool SendSimulatedResponse(const std::string& correlation_id,
-                                const std::string& vehicle_id,
-                                swdv::dispatcher_rpc_envelope::rpc_status_t status,
-                                const std::string& result_json,
-                                const std::string& error_message = "") {
-        if (!kafka_available_ || !kafka_producer_) {
-            return false;
-        }
-
-        // Build the response
-        swdv::dispatcher_rpc_envelope::rpc_response_t response;
-        response.set_correlation_id(correlation_id);
-        response.set_status(status);
-        response.set_result_json(result_json);
-        response.set_error_message(error_message);
-        response.set_duration_ms(42);
-
-        // Encode as offboard message
-        std::string payload = ifex::offboard::encode_rpc_response_offboard(
-            vehicle_id, response);
-
-        // Produce to Kafka
-        RdKafka::ErrorCode err = kafka_producer_->produce(
-            std::string(KAFKA_TOPIC_V2C),
-            RdKafka::Topic::PARTITION_UA,
-            RdKafka::Producer::RK_MSG_COPY,
-            const_cast<char*>(payload.data()),
-            payload.size(),
-            vehicle_id.data(),
-            vehicle_id.size(),
-            0,  // timestamp
-            nullptr);
-
-        if (err != RdKafka::ERR_NO_ERROR) {
-            LOG(ERROR) << "Kafka produce failed: " << RdKafka::err2str(err);
-            return false;
-        }
-
-        kafka_producer_->poll(0);
-        kafka_producer_->flush(1000);
-        return true;
+        ASSERT_TRUE(call_method_stub_ != nullptr) << "gRPC stubs not initialized";
     }
 };
 
 // Initialize static members
-std::unique_ptr<CloudDispatcherService::Stub> DispatcherE2ETest::stub_;
+std::unique_ptr<proto::call_method_service::Stub> DispatcherE2ETest::call_method_stub_;
+std::unique_ptr<proto::call_method_async_service::Stub> DispatcherE2ETest::call_method_async_stub_;
+std::unique_ptr<proto::call_fleet_method_service::Stub> DispatcherE2ETest::call_fleet_method_stub_;
+std::unique_ptr<proto::get_rpc_status_service::Stub> DispatcherE2ETest::get_rpc_status_stub_;
+std::unique_ptr<proto::cancel_rpc_service::Stub> DispatcherE2ETest::cancel_rpc_stub_;
+std::unique_ptr<proto::list_rpc_requests_service::Stub> DispatcherE2ETest::list_rpc_requests_stub_;
+std::unique_ptr<proto::healthy_service::Stub> DispatcherE2ETest::healthy_stub_;
 std::shared_ptr<grpc::Channel> DispatcherE2ETest::channel_;
 pid_t DispatcherE2ETest::dispatcher_api_pid_ = 0;
 std::unique_ptr<ifex::offboard::PostgresClient> DispatcherE2ETest::db_;
@@ -309,294 +293,47 @@ std::unique_ptr<RdKafka::Producer> DispatcherE2ETest::kafka_producer_;
 bool DispatcherE2ETest::kafka_available_ = false;
 
 // =============================================================================
-// Successful RPC Round-Trip Tests
-// =============================================================================
-
-TEST_F(DispatcherE2ETest, CallMethodAsync_SuccessfulRoundTrip) {
-    if (!kafka_available_) {
-        GTEST_SKIP() << "Kafka not available";
-    }
-
-    // Step 1: Send async RPC request
-    grpc::ClientContext async_context;
-    CallMethodAsyncRequest async_request;
-    CallMethodAsyncResponse async_response;
-
-    async_request.set_vehicle_id(VEHICLE_ID);
-    async_request.set_service_name("HvacService");
-    async_request.set_method_name("GetTemperature");
-    async_request.set_parameters_json("{}");
-    async_request.set_timeout_ms(5000);
-    async_request.set_requester_id("e2e-test");
-
-    auto status = stub_->CallMethodAsync(&async_context, async_request, &async_response);
-    ASSERT_TRUE(status.ok()) << "CallMethodAsync failed: " << status.error_message();
-    ASSERT_TRUE(async_response.accepted());
-    ASSERT_FALSE(async_response.correlation_id().empty());
-
-    std::string correlation_id = async_response.correlation_id();
-    LOG(INFO) << "Created async request with correlation_id: " << correlation_id;
-
-    // Step 2: Verify request is pending
-    {
-        grpc::ClientContext status_context;
-        GetRpcStatusRequest status_request;
-        GetRpcStatusResponse status_response;
-
-        status_request.set_correlation_id(correlation_id);
-
-        auto s = stub_->GetRpcStatus(&status_context, status_request, &status_response);
-        ASSERT_TRUE(s.ok()) << "GetRpcStatus failed: " << s.error_message();
-        EXPECT_EQ(status_response.status(), CLOUD_RPC_PENDING);
-    }
-
-    // Step 3: Simulate vehicle response via Kafka
-    bool sent = SendSimulatedResponse(
-        correlation_id,
-        VEHICLE_ID,
-        swdv::dispatcher_rpc_envelope::SUCCESS,
-        R"({"temperature": 22.5, "unit": "celsius"})");
-    ASSERT_TRUE(sent) << "Failed to send simulated response";
-
-    // Step 4: Poll for status change (with timeout)
-    CloudRpcStatus final_status = CLOUD_RPC_PENDING;
-    std::string result_json;
-    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-
-    while (std::chrono::steady_clock::now() < deadline) {
-        grpc::ClientContext status_context;
-        GetRpcStatusRequest status_request;
-        GetRpcStatusResponse status_response;
-
-        status_request.set_correlation_id(correlation_id);
-
-        auto s = stub_->GetRpcStatus(&status_context, status_request, &status_response);
-        ASSERT_TRUE(s.ok()) << "GetRpcStatus failed: " << s.error_message();
-
-        final_status = status_response.status();
-        result_json = status_response.result_json();
-
-        if (final_status != CLOUD_RPC_PENDING) {
-            break;
-        }
-
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    }
-
-    // Step 5: Verify request completed successfully
-    EXPECT_EQ(final_status, CLOUD_RPC_SUCCESS);
-    EXPECT_EQ(result_json, R"({"temperature": 22.5, "unit": "celsius"})");
-}
-
-TEST_F(DispatcherE2ETest, CallMethodAsync_FailedResponse) {
-    if (!kafka_available_) {
-        GTEST_SKIP() << "Kafka not available";
-    }
-
-    // Step 1: Send async RPC request
-    grpc::ClientContext async_context;
-    CallMethodAsyncRequest async_request;
-    CallMethodAsyncResponse async_response;
-
-    async_request.set_vehicle_id(VEHICLE_ID);
-    async_request.set_service_name("DiagService");
-    async_request.set_method_name("ClearDtc");
-    async_request.set_parameters_json(R"({"dtc_code": "P0100"})");
-    async_request.set_timeout_ms(5000);
-
-    auto status = stub_->CallMethodAsync(&async_context, async_request, &async_response);
-    ASSERT_TRUE(status.ok()) << "CallMethodAsync failed: " << status.error_message();
-    ASSERT_TRUE(async_response.accepted());
-
-    std::string correlation_id = async_response.correlation_id();
-
-    // Step 2: Simulate failed response
-    bool sent = SendSimulatedResponse(
-        correlation_id,
-        VEHICLE_ID,
-        swdv::dispatcher_rpc_envelope::FAILED,
-        "",
-        "DTC not found in vehicle memory");
-    ASSERT_TRUE(sent);
-
-    // Step 3: Poll for status change (with timeout)
-    CloudRpcStatus final_status = CLOUD_RPC_PENDING;
-    std::string error_message;
-    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-
-    while (std::chrono::steady_clock::now() < deadline) {
-        grpc::ClientContext status_context;
-        GetRpcStatusRequest status_request;
-        GetRpcStatusResponse status_response;
-
-        status_request.set_correlation_id(correlation_id);
-
-        auto s = stub_->GetRpcStatus(&status_context, status_request, &status_response);
-        ASSERT_TRUE(s.ok()) << "GetRpcStatus failed: " << s.error_message();
-
-        final_status = status_response.status();
-        error_message = status_response.error_message();
-
-        if (final_status != CLOUD_RPC_PENDING) {
-            break;
-        }
-
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    }
-
-    // Verify request failed
-    EXPECT_EQ(final_status, CLOUD_RPC_FAILED);
-    EXPECT_EQ(error_message, "DTC not found in vehicle memory");
-}
-
-TEST_F(DispatcherE2ETest, CallMethodAsync_CancelPendingRequest) {
-    if (!kafka_available_) {
-        GTEST_SKIP() << "Kafka not available";
-    }
-
-    // Step 1: Send async RPC request
-    grpc::ClientContext async_context;
-    CallMethodAsyncRequest async_request;
-    CallMethodAsyncResponse async_response;
-
-    async_request.set_vehicle_id(VEHICLE_ID);
-    async_request.set_service_name("SlowService");
-    async_request.set_method_name("LongOperation");
-    async_request.set_timeout_ms(30000);
-
-    auto status = stub_->CallMethodAsync(&async_context, async_request, &async_response);
-    ASSERT_TRUE(status.ok()) << "CallMethodAsync failed: " << status.error_message();
-
-    std::string correlation_id = async_response.correlation_id();
-
-    // Step 2: Cancel the request
-    {
-        grpc::ClientContext cancel_context;
-        CancelRpcRequest cancel_request;
-        CancelRpcResponse cancel_response;
-
-        cancel_request.set_correlation_id(correlation_id);
-
-        auto s = stub_->CancelRpc(&cancel_context, cancel_request, &cancel_response);
-        ASSERT_TRUE(s.ok()) << "CancelRpc failed: " << s.error_message();
-        EXPECT_TRUE(cancel_response.success());
-    }
-
-    // Step 3: Verify request is cancelled
-    {
-        grpc::ClientContext status_context;
-        GetRpcStatusRequest status_request;
-        GetRpcStatusResponse status_response;
-
-        status_request.set_correlation_id(correlation_id);
-
-        auto s = stub_->GetRpcStatus(&status_context, status_request, &status_response);
-        ASSERT_TRUE(s.ok()) << "GetRpcStatus failed: " << s.error_message();
-        EXPECT_EQ(status_response.status(), CLOUD_RPC_CANCELLED);
-    }
-}
-
-TEST_F(DispatcherE2ETest, CallMethodAsync_ListPendingRequests) {
-    if (!kafka_available_) {
-        GTEST_SKIP() << "Kafka not available";
-    }
-
-    // Create multiple pending requests with unique service name to filter
-    std::vector<std::string> correlation_ids;
-    const std::string unique_service = "ListTestService_" + std::to_string(getpid());
-
-    for (int i = 0; i < 3; ++i) {
-        grpc::ClientContext async_context;
-        CallMethodAsyncRequest async_request;
-        CallMethodAsyncResponse async_response;
-
-        async_request.set_vehicle_id(VEHICLE_ID);
-        async_request.set_service_name(unique_service);
-        async_request.set_method_name("Method" + std::to_string(i));
-        async_request.set_timeout_ms(30000);
-
-        auto status = stub_->CallMethodAsync(&async_context, async_request, &async_response);
-        ASSERT_TRUE(status.ok());
-        correlation_ids.push_back(async_response.correlation_id());
-    }
-
-    // List pending requests filtered by our unique service
-    grpc::ClientContext list_context;
-    ListRpcRequestsRequest list_request;
-    ListRpcRequestsResponse list_response;
-
-    list_request.set_vehicle_id_filter(VEHICLE_ID);
-    list_request.set_service_name_filter(unique_service);
-    list_request.set_pending_only(true);
-    list_request.set_page_size(10);
-
-    auto status = stub_->ListRpcRequests(&list_context, list_request, &list_response);
-    ASSERT_TRUE(status.ok()) << "ListRpcRequests failed: " << status.error_message();
-
-    // Should have exactly 3 pending requests for our service
-    EXPECT_EQ(list_response.requests_size(), 3);
-
-    // Verify all our requests are in pending state
-    for (const auto& corr_id : correlation_ids) {
-        grpc::ClientContext check_context;
-        GetRpcStatusRequest check_request;
-        GetRpcStatusResponse check_response;
-        check_request.set_correlation_id(corr_id);
-
-        auto s = stub_->GetRpcStatus(&check_context, check_request, &check_response);
-        ASSERT_TRUE(s.ok());
-        EXPECT_EQ(check_response.status(), CLOUD_RPC_PENDING);
-    }
-
-    // Clean up - cancel all created requests
-    for (const auto& corr_id : correlation_ids) {
-        grpc::ClientContext cancel_context;
-        CancelRpcRequest cancel_request;
-        CancelRpcResponse cancel_response;
-        cancel_request.set_correlation_id(corr_id);
-        stub_->CancelRpc(&cancel_context, cancel_request, &cancel_response);
-    }
-}
-
-// =============================================================================
-// CallMethodAsync Validation Tests
+// API Validation Tests (no vehicle needed - just test input validation)
 // =============================================================================
 
 TEST_F(DispatcherE2ETest, CallMethodAsync_ValidationEmptyVehicleId) {
     grpc::ClientContext context;
-    CallMethodAsyncRequest request;
-    CallMethodAsyncResponse response;
+    proto::call_method_async_request request;
+    proto::call_method_async_response response;
 
-    request.set_service_name("TestService");
-    request.set_method_name("TestMethod");
+    auto* inner = request.mutable_request();
+    inner->set_service_name("TestService");
+    inner->set_method_name("TestMethod");
 
-    auto status = stub_->CallMethodAsync(&context, request, &response);
+    auto status = call_method_async_stub_->call_method_async(&context, request, &response);
     EXPECT_EQ(status.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
     EXPECT_TRUE(status.error_message().find("vehicle_id") != std::string::npos);
 }
 
 TEST_F(DispatcherE2ETest, CallMethodAsync_ValidationEmptyServiceName) {
     grpc::ClientContext context;
-    CallMethodAsyncRequest request;
-    CallMethodAsyncResponse response;
+    proto::call_method_async_request request;
+    proto::call_method_async_response response;
 
-    request.set_vehicle_id(VEHICLE_ID);
-    request.set_method_name("TestMethod");
+    auto* inner = request.mutable_request();
+    inner->set_vehicle_id(VEHICLE_ID);
+    inner->set_method_name("TestMethod");
 
-    auto status = stub_->CallMethodAsync(&context, request, &response);
+    auto status = call_method_async_stub_->call_method_async(&context, request, &response);
     EXPECT_EQ(status.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
     EXPECT_TRUE(status.error_message().find("service_name") != std::string::npos);
 }
 
 TEST_F(DispatcherE2ETest, CallMethodAsync_ValidationEmptyMethodName) {
     grpc::ClientContext context;
-    CallMethodAsyncRequest request;
-    CallMethodAsyncResponse response;
+    proto::call_method_async_request request;
+    proto::call_method_async_response response;
 
-    request.set_vehicle_id(VEHICLE_ID);
-    request.set_service_name("TestService");
+    auto* inner = request.mutable_request();
+    inner->set_vehicle_id(VEHICLE_ID);
+    inner->set_service_name("TestService");
 
-    auto status = stub_->CallMethodAsync(&context, request, &response);
+    auto status = call_method_async_stub_->call_method_async(&context, request, &response);
     EXPECT_EQ(status.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
     EXPECT_TRUE(status.error_message().find("method_name") != std::string::npos);
 }
@@ -609,13 +346,14 @@ TEST_F(DispatcherE2ETest, CallMethod_ValidationEmptyVehicleId) {
     grpc::ClientContext context;
     context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(2));
 
-    CallMethodRequest request;
-    CallMethodResponse response;
+    proto::call_method_request request;
+    proto::call_method_response response;
 
-    request.set_service_name("TestService");
-    request.set_method_name("TestMethod");
+    auto* inner = request.mutable_request();
+    inner->set_service_name("TestService");
+    inner->set_method_name("TestMethod");
 
-    auto status = stub_->CallMethod(&context, request, &response);
+    auto status = call_method_stub_->call_method(&context, request, &response);
     EXPECT_EQ(status.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
 }
 
@@ -623,13 +361,14 @@ TEST_F(DispatcherE2ETest, CallMethod_ValidationEmptyServiceName) {
     grpc::ClientContext context;
     context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(2));
 
-    CallMethodRequest request;
-    CallMethodResponse response;
+    proto::call_method_request request;
+    proto::call_method_response response;
 
-    request.set_vehicle_id(VEHICLE_ID);
-    request.set_method_name("TestMethod");
+    auto* inner = request.mutable_request();
+    inner->set_vehicle_id(VEHICLE_ID);
+    inner->set_method_name("TestMethod");
 
-    auto status = stub_->CallMethod(&context, request, &response);
+    auto status = call_method_stub_->call_method(&context, request, &response);
     EXPECT_EQ(status.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
 }
 
@@ -637,13 +376,14 @@ TEST_F(DispatcherE2ETest, CallMethod_ValidationEmptyMethodName) {
     grpc::ClientContext context;
     context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(2));
 
-    CallMethodRequest request;
-    CallMethodResponse response;
+    proto::call_method_request request;
+    proto::call_method_response response;
 
-    request.set_vehicle_id(VEHICLE_ID);
-    request.set_service_name("TestService");
+    auto* inner = request.mutable_request();
+    inner->set_vehicle_id(VEHICLE_ID);
+    inner->set_service_name("TestService");
 
-    auto status = stub_->CallMethod(&context, request, &response);
+    auto status = call_method_stub_->call_method(&context, request, &response);
     EXPECT_EQ(status.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
 }
 
@@ -653,38 +393,41 @@ TEST_F(DispatcherE2ETest, CallMethod_ValidationEmptyMethodName) {
 
 TEST_F(DispatcherE2ETest, CallFleetMethod_ValidationEmptyVehicleIds) {
     grpc::ClientContext context;
-    CallFleetMethodRequest request;
-    CallFleetMethodResponse response;
+    proto::call_fleet_method_request request;
+    proto::call_fleet_method_response response;
 
-    request.set_service_name("TestService");
-    request.set_method_name("TestMethod");
+    auto* inner = request.mutable_request();
+    inner->set_service_name("TestService");
+    inner->set_method_name("TestMethod");
 
-    auto status = stub_->CallFleetMethod(&context, request, &response);
+    auto status = call_fleet_method_stub_->call_fleet_method(&context, request, &response);
     EXPECT_EQ(status.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
     EXPECT_TRUE(status.error_message().find("vehicle") != std::string::npos);
 }
 
 TEST_F(DispatcherE2ETest, CallFleetMethod_ValidationEmptyServiceName) {
     grpc::ClientContext context;
-    CallFleetMethodRequest request;
-    CallFleetMethodResponse response;
+    proto::call_fleet_method_request request;
+    proto::call_fleet_method_response response;
 
-    request.add_vehicle_ids(VEHICLE_ID);
-    request.set_method_name("TestMethod");
+    auto* inner = request.mutable_request();
+    inner->add_vehicle_ids(VEHICLE_ID);
+    inner->set_method_name("TestMethod");
 
-    auto status = stub_->CallFleetMethod(&context, request, &response);
+    auto status = call_fleet_method_stub_->call_fleet_method(&context, request, &response);
     EXPECT_EQ(status.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
 }
 
 TEST_F(DispatcherE2ETest, CallFleetMethod_ValidationEmptyMethodName) {
     grpc::ClientContext context;
-    CallFleetMethodRequest request;
-    CallFleetMethodResponse response;
+    proto::call_fleet_method_request request;
+    proto::call_fleet_method_response response;
 
-    request.add_vehicle_ids(VEHICLE_ID);
-    request.set_service_name("TestService");
+    auto* inner = request.mutable_request();
+    inner->add_vehicle_ids(VEHICLE_ID);
+    inner->set_service_name("TestService");
 
-    auto status = stub_->CallFleetMethod(&context, request, &response);
+    auto status = call_fleet_method_stub_->call_fleet_method(&context, request, &response);
     EXPECT_EQ(status.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
 }
 
@@ -694,21 +437,21 @@ TEST_F(DispatcherE2ETest, CallFleetMethod_ValidationEmptyMethodName) {
 
 TEST_F(DispatcherE2ETest, GetRpcStatus_EmptyCorrelationId) {
     grpc::ClientContext context;
-    GetRpcStatusRequest request;
-    GetRpcStatusResponse response;
+    proto::get_rpc_status_request request;
+    proto::get_rpc_status_response response;
 
-    auto status = stub_->GetRpcStatus(&context, request, &response);
+    auto status = get_rpc_status_stub_->get_rpc_status(&context, request, &response);
     EXPECT_EQ(status.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
 }
 
 TEST_F(DispatcherE2ETest, GetRpcStatus_NotFound) {
     grpc::ClientContext context;
-    GetRpcStatusRequest request;
-    GetRpcStatusResponse response;
+    proto::get_rpc_status_request request;
+    proto::get_rpc_status_response response;
 
     request.set_correlation_id("nonexistent-correlation-id-12345");
 
-    auto status = stub_->GetRpcStatus(&context, request, &response);
+    auto status = get_rpc_status_stub_->get_rpc_status(&context, request, &response);
     EXPECT_EQ(status.error_code(), grpc::StatusCode::NOT_FOUND);
 }
 
@@ -718,23 +461,23 @@ TEST_F(DispatcherE2ETest, GetRpcStatus_NotFound) {
 
 TEST_F(DispatcherE2ETest, CancelRpc_EmptyCorrelationId) {
     grpc::ClientContext context;
-    CancelRpcRequest request;
-    CancelRpcResponse response;
+    proto::cancel_rpc_request request;
+    proto::cancel_rpc_response response;
 
-    auto status = stub_->CancelRpc(&context, request, &response);
+    auto status = cancel_rpc_stub_->cancel_rpc(&context, request, &response);
     EXPECT_EQ(status.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
 }
 
 TEST_F(DispatcherE2ETest, CancelRpc_NotFound) {
     grpc::ClientContext context;
-    CancelRpcRequest request;
-    CancelRpcResponse response;
+    proto::cancel_rpc_request request;
+    proto::cancel_rpc_response response;
 
     request.set_correlation_id("nonexistent-cancel-id-12345");
 
-    auto status = stub_->CancelRpc(&context, request, &response);
+    auto status = cancel_rpc_stub_->cancel_rpc(&context, request, &response);
     ASSERT_TRUE(status.ok()) << "CancelRpc failed: " << status.error_message();
-    EXPECT_FALSE(response.success());
+    EXPECT_FALSE(response.result().success());
 }
 
 // =============================================================================
@@ -743,12 +486,12 @@ TEST_F(DispatcherE2ETest, CancelRpc_NotFound) {
 
 TEST_F(DispatcherE2ETest, ListRpcRequests_EmptyResults) {
     grpc::ClientContext context;
-    ListRpcRequestsRequest request;
-    ListRpcRequestsResponse response;
+    proto::list_rpc_requests_request request;
+    proto::list_rpc_requests_response response;
 
-    request.set_page_size(10);
+    request.mutable_filter()->set_page_size(10);
 
-    auto status = stub_->ListRpcRequests(&context, request, &response);
+    auto status = list_rpc_requests_stub_->list_rpc_requests(&context, request, &response);
     ASSERT_TRUE(status.ok()) << "ListRpcRequests failed: " << status.error_message();
 }
 
@@ -771,7 +514,10 @@ TEST_F(DispatcherE2ETest, ListRpcRequests_EmptyResults) {
 class DispatcherRealVehicleTest : public ifex::offboard::test::E2ETestFixture {
 protected:
     static constexpr const char* DISPATCHER_ADDR = "localhost:50082";
-    static std::unique_ptr<CloudDispatcherService::Stub> stub_;
+    // IFEX-based stubs
+    static std::unique_ptr<proto::call_method_service::Stub> call_method_stub_;
+    static std::unique_ptr<proto::call_method_async_service::Stub> call_method_async_stub_;
+    static std::unique_ptr<proto::get_rpc_status_service::Stub> get_rpc_status_stub_;
     static std::shared_ptr<grpc::Channel> channel_;
     static pid_t dispatcher_pid_;
 
@@ -808,18 +554,49 @@ protected:
         // Connect gRPC client
         std::this_thread::sleep_for(std::chrono::seconds(2));
         channel_ = grpc::CreateChannel(DISPATCHER_ADDR, grpc::InsecureChannelCredentials());
-        stub_ = CloudDispatcherService::NewStub(channel_);
+        call_method_stub_ = proto::call_method_service::NewStub(channel_);
+        call_method_async_stub_ = proto::call_method_async_service::NewStub(channel_);
+        get_rpc_status_stub_ = proto::get_rpc_status_service::NewStub(channel_);
 
         auto deadline = std::chrono::system_clock::now() + std::chrono::seconds(10);
         ASSERT_TRUE(channel_->WaitForConnected(deadline))
             << "Failed to connect to dispatcher_api";
+
+        // Warm-up: Send a test RPC to ensure Kafka consumer is fully initialized
+        // The first RPC after dispatcher_api starts can be flaky due to consumer startup
+        LOG(INFO) << "Warming up dispatcher with test RPC...";
+        {
+            grpc::ClientContext warmup_ctx;
+            warmup_ctx.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(30));
+
+            proto::call_method_request warmup_req;
+            auto* inner = warmup_req.mutable_request();
+            inner->set_vehicle_id(ifex::offboard::test::E2ETestInfrastructure::VEHICLE_ID);
+            inner->set_service_name("echo_service");
+            inner->set_method_name("echo");
+            inner->set_parameters_json(R"({"message": "warmup"})");
+            inner->set_timeout_ms(15000);
+
+            proto::call_method_response warmup_resp;
+            auto warmup_status = call_method_stub_->call_method(&warmup_ctx, warmup_req, &warmup_resp);
+            if (warmup_status.ok() && warmup_resp.result().status() == proto::RPC_SUCCESS) {
+                LOG(INFO) << "Warm-up RPC succeeded, dispatcher ready";
+            } else {
+                LOG(WARNING) << "Warm-up RPC failed (expected on first run): "
+                             << warmup_status.error_message();
+                // Give more time for consumer to initialize
+                std::this_thread::sleep_for(std::chrono::seconds(2));
+            }
+        }
 
         LOG(INFO) << "Real vehicle test infrastructure ready";
     }
 
     static void TearDownTestSuite() {
         // Close gRPC first
-        stub_.reset();
+        call_method_stub_.reset();
+        call_method_async_stub_.reset();
+        get_rpc_status_stub_.reset();
         channel_.reset();
 
         // Stop dispatcher_api
@@ -837,7 +614,9 @@ protected:
 };
 
 // Static members
-std::unique_ptr<CloudDispatcherService::Stub> DispatcherRealVehicleTest::stub_;
+std::unique_ptr<proto::call_method_service::Stub> DispatcherRealVehicleTest::call_method_stub_;
+std::unique_ptr<proto::call_method_async_service::Stub> DispatcherRealVehicleTest::call_method_async_stub_;
+std::unique_ptr<proto::get_rpc_status_service::Stub> DispatcherRealVehicleTest::get_rpc_status_stub_;
 std::shared_ptr<grpc::Channel> DispatcherRealVehicleTest::channel_;
 pid_t DispatcherRealVehicleTest::dispatcher_pid_ = 0;
 
@@ -848,42 +627,44 @@ TEST_F(DispatcherRealVehicleTest, RealVehicle_EchoRoundTrip) {
     grpc::ClientContext context;
     context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(30));
 
-    CallMethodRequest request;
-    request.set_vehicle_id(ifex::offboard::test::E2ETestInfrastructure::VEHICLE_ID);
-    request.set_service_name("echo_service");
-    request.set_method_name("echo");
-    request.set_parameters_json(R"({"message": "Hello from real E2E test!"})");
-    request.set_timeout_ms(15000);
+    proto::call_method_request request;
+    auto* inner = request.mutable_request();
+    inner->set_vehicle_id(ifex::offboard::test::E2ETestInfrastructure::VEHICLE_ID);
+    inner->set_service_name("echo_service");
+    inner->set_method_name("echo");
+    inner->set_parameters_json(R"({"message": "Hello from real E2E test!"})");
+    inner->set_timeout_ms(15000);
 
-    CallMethodResponse response;
-    auto status = stub_->CallMethod(&context, request, &response);
+    proto::call_method_response response;
+    auto status = call_method_stub_->call_method(&context, request, &response);
 
     ASSERT_TRUE(status.ok()) << "CallMethod failed: " << status.error_message();
-    EXPECT_EQ(response.status(), CLOUD_RPC_SUCCESS);
+    EXPECT_EQ(response.result().status(), proto::RPC_SUCCESS);
     // JSON may or may not have spaces after colons depending on serializer
-    EXPECT_TRUE(response.result_json() == R"({"response":"Hello from real E2E test!"})" ||
-                response.result_json() == R"({"response": "Hello from real E2E test!"})")
-        << "Actual: " << response.result_json();
+    EXPECT_TRUE(response.result().result_json() == R"({"response":"Hello from real E2E test!"})" ||
+                response.result().result_json() == R"({"response": "Hello from real E2E test!"})")
+        << "Actual: " << response.result().result_json();
 }
 
 TEST_F(DispatcherRealVehicleTest, RealVehicle_EchoWithDelay) {
     grpc::ClientContext context;
     context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(30));
 
-    CallMethodRequest request;
-    request.set_vehicle_id(ifex::offboard::test::E2ETestInfrastructure::VEHICLE_ID);
-    request.set_service_name("echo_service");
-    request.set_method_name("echo_with_delay");
-    request.set_parameters_json(R"({"message": "Delayed message", "delay_ms": 500})");
-    request.set_timeout_ms(15000);
+    proto::call_method_request request;
+    auto* inner = request.mutable_request();
+    inner->set_vehicle_id(ifex::offboard::test::E2ETestInfrastructure::VEHICLE_ID);
+    inner->set_service_name("echo_service");
+    inner->set_method_name("echo_with_delay");
+    inner->set_parameters_json(R"({"message": "Delayed message", "delay_ms": 500})");
+    inner->set_timeout_ms(15000);
 
     auto start = std::chrono::steady_clock::now();
-    CallMethodResponse response;
-    auto status = stub_->CallMethod(&context, request, &response);
+    proto::call_method_response response;
+    auto status = call_method_stub_->call_method(&context, request, &response);
     auto elapsed = std::chrono::steady_clock::now() - start;
 
     ASSERT_TRUE(status.ok()) << "CallMethod failed: " << status.error_message();
-    EXPECT_EQ(response.status(), CLOUD_RPC_SUCCESS);
+    EXPECT_EQ(response.result().status(), proto::RPC_SUCCESS);
 
     // Should have taken at least 500ms
     auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count();
@@ -896,67 +677,69 @@ TEST_F(DispatcherRealVehicleTest, RealVehicle_ConcatStrings) {
     grpc::ClientContext context;
     context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(30));
 
-    CallMethodRequest request;
-    request.set_vehicle_id(ifex::offboard::test::E2ETestInfrastructure::VEHICLE_ID);
-    request.set_service_name("echo_service");
-    request.set_method_name("concat");
-    request.set_parameters_json(R"({"first": "Hello", "second": "World", "separator": ", "})");
-    request.set_timeout_ms(15000);
+    proto::call_method_request request;
+    auto* inner = request.mutable_request();
+    inner->set_vehicle_id(ifex::offboard::test::E2ETestInfrastructure::VEHICLE_ID);
+    inner->set_service_name("echo_service");
+    inner->set_method_name("concat");
+    inner->set_parameters_json(R"({"first": "Hello", "second": "World", "separator": ", "})");
+    inner->set_timeout_ms(15000);
 
-    CallMethodResponse response;
-    auto status = stub_->CallMethod(&context, request, &response);
+    proto::call_method_response response;
+    auto status = call_method_stub_->call_method(&context, request, &response);
 
     ASSERT_TRUE(status.ok()) << "CallMethod failed: " << status.error_message();
-    EXPECT_EQ(response.status(), CLOUD_RPC_SUCCESS);
+    EXPECT_EQ(response.result().status(), proto::RPC_SUCCESS);
     // JSON may or may not have spaces after colons depending on serializer
-    EXPECT_TRUE(response.result_json() == R"({"result":"Hello, World"})" ||
-                response.result_json() == R"({"result": "Hello, World"})")
-        << "Actual: " << response.result_json();
+    EXPECT_TRUE(response.result().result_json() == R"({"result":"Hello, World"})" ||
+                response.result().result_json() == R"({"result": "Hello, World"})")
+        << "Actual: " << response.result().result_json();
 }
 
 TEST_F(DispatcherRealVehicleTest, RealVehicle_AsyncRoundTrip) {
     // Step 1: Send async RPC
     grpc::ClientContext async_ctx;
-    CallMethodAsyncRequest async_req;
-    async_req.set_vehicle_id(ifex::offboard::test::E2ETestInfrastructure::VEHICLE_ID);
-    async_req.set_service_name("echo_service");
-    async_req.set_method_name("echo");
-    async_req.set_parameters_json(R"({"message": "Async test"})");
-    async_req.set_timeout_ms(30000);
+    proto::call_method_async_request async_req;
+    auto* inner = async_req.mutable_request();
+    inner->set_vehicle_id(ifex::offboard::test::E2ETestInfrastructure::VEHICLE_ID);
+    inner->set_service_name("echo_service");
+    inner->set_method_name("echo");
+    inner->set_parameters_json(R"({"message": "Async test"})");
+    inner->set_timeout_ms(30000);
 
-    CallMethodAsyncResponse async_resp;
-    auto status = stub_->CallMethodAsync(&async_ctx, async_req, &async_resp);
+    proto::call_method_async_response async_resp;
+    auto status = call_method_async_stub_->call_method_async(&async_ctx, async_req, &async_resp);
     ASSERT_TRUE(status.ok());
-    ASSERT_TRUE(async_resp.accepted());
+    ASSERT_TRUE(async_resp.result().accepted());
 
-    std::string corr_id = async_resp.correlation_id();
+    std::string corr_id = async_resp.result().correlation_id();
     LOG(INFO) << "Async request sent, correlation_id=" << corr_id;
 
     // Step 2: Poll for completion (real vehicle response)
-    CloudRpcStatus final_status = CLOUD_RPC_PENDING;
+    proto::cloud_rpc_status_t final_status = proto::RPC_PENDING;
     std::string result;
     auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
 
     while (std::chrono::steady_clock::now() < deadline) {
         grpc::ClientContext poll_ctx;
-        GetRpcStatusRequest poll_req;
+        proto::get_rpc_status_request poll_req;
         poll_req.set_correlation_id(corr_id);
 
-        GetRpcStatusResponse poll_resp;
-        auto s = stub_->GetRpcStatus(&poll_ctx, poll_req, &poll_resp);
+        proto::get_rpc_status_response poll_resp;
+        auto s = get_rpc_status_stub_->get_rpc_status(&poll_ctx, poll_req, &poll_resp);
         ASSERT_TRUE(s.ok());
 
-        final_status = poll_resp.status();
-        result = poll_resp.result_json();
+        final_status = poll_resp.status().status();
+        result = poll_resp.status().result_json();
 
-        if (final_status != CLOUD_RPC_PENDING) {
+        if (final_status != proto::RPC_PENDING) {
             break;
         }
 
         std::this_thread::sleep_for(std::chrono::milliseconds(200));
     }
 
-    EXPECT_EQ(final_status, CLOUD_RPC_SUCCESS);
+    EXPECT_EQ(final_status, proto::RPC_SUCCESS);
     // JSON may or may not have spaces after colons depending on serializer
     EXPECT_TRUE(result == R"({"response":"Async test"})" ||
                 result == R"({"response": "Async test"})")

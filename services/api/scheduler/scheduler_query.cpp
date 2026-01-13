@@ -18,6 +18,17 @@ int status_string_to_int(const std::string& status) {
     return 0;  // unknown
 }
 
+/// Convert sync_state string from jobs table to SyncState enum
+query::SyncState sync_state_to_enum(const std::string& sync_state) {
+    if (sync_state == "synced") {
+        return query::SyncState::CONFIRMED;
+    }
+    if (sync_state == "pending") {
+        return query::SyncState::PENDING;
+    }
+    return query::SyncState::UNKNOWN;
+}
+
 }  // namespace
 
 SchedulerQuery::SchedulerQuery(std::shared_ptr<ifex::offboard::PostgresClient> db)
@@ -31,12 +42,17 @@ SchedulerQueryResult<query::JobInfoData> SchedulerQuery::list_jobs(
     int page_size,
     int offset) {
 
+    // Query jobs table with sync_state tracking
     std::string sql = R"(
         SELECT j.job_id, j.vehicle_id, COALESCE(e.fleet_id, '') as fleet_id,
-               COALESCE(e.region, '') as region, j.title, j.service_name,
-               j.method_name, j.parameters, j.scheduled_time,
-               j.recurrence_rule, '' as end_time, j.status, j.created_at_ms,
-               j.updated_at_ms, j.next_run_time, 0 as execution_count
+               COALESCE(e.region, '') as region, COALESCE(j.title, '') as title, j.service_name,
+               j.method_name, COALESCE(j.parameters::text, '{}') as parameters,
+               COALESCE(j.scheduled_time, '') as scheduled_time,
+               COALESCE(j.recurrence_rule, '') as recurrence_rule, COALESCE(j.end_time, '') as end_time,
+               j.status, j.created_at_ms, j.updated_at_ms, j.next_run_time, 0 as execution_count,
+               COALESCE(j.sync_state, 'synced') as sync_state,
+               CAST(EXTRACT(EPOCH FROM j.sync_updated_at) * 1000 AS BIGINT) as synced_at_ms,
+               COALESCE(j.origin, 'vehicle') as origin
         FROM jobs j
         LEFT JOIN vehicle_enrichment e ON j.vehicle_id = e.vehicle_id
         WHERE 1=1
@@ -110,11 +126,13 @@ SchedulerQueryResult<query::JobInfoData> SchedulerQuery::list_jobs(
         job.recurrence_rule = row.get_string(9);
         job.end_time = row.get_string(10);
         job.status = status_string_to_int(row.get_string(11));
-        job.created_at_ns = row.is_null(12) ? 0 : row.get_int64(12);  // stored as ms, read as ns (divide later)
-        job.updated_at_ns = row.is_null(13) ? 0 : row.get_int64(13);
-        // next_run_time is VARCHAR in schema, convert to ns if parseable
-        job.next_run_ns = 0;  // TODO: parse next_run_time string if needed
+        job.created_at_ms = row.is_null(12) ? 0 : row.get_int64(12);
+        job.updated_at_ms = row.is_null(13) ? 0 : row.get_int64(13);
         job.execution_count = row.is_null(15) ? 0 : row.get_int(15);
+        // Sync state from jobs table
+        std::string sync_state = row.is_null(16) ? "synced" : row.get_string(16);
+        job.synced_at_ms = row.is_null(17) ? 0 : row.get_int64(17);
+        job.sync_state = sync_state_to_enum(sync_state);
         query_result.items.push_back(std::move(job));
     }
 
@@ -128,10 +146,14 @@ SchedulerQueryResult<query::JobInfoData> SchedulerQuery::list_jobs(
 std::optional<query::JobInfoData> SchedulerQuery::get_job(const std::string& job_id) {
     const char* sql = R"(
         SELECT j.job_id, j.vehicle_id, COALESCE(e.fleet_id, '') as fleet_id,
-               COALESCE(e.region, '') as region, j.title, j.service_name,
-               j.method_name, j.parameters, j.scheduled_time,
-               j.recurrence_rule, '' as end_time, j.status, j.created_at_ms,
-               j.updated_at_ms, j.next_run_time, 0 as execution_count
+               COALESCE(e.region, '') as region, COALESCE(j.title, '') as title, j.service_name,
+               j.method_name, COALESCE(j.parameters::text, '{}') as parameters,
+               COALESCE(j.scheduled_time, '') as scheduled_time,
+               COALESCE(j.recurrence_rule, '') as recurrence_rule, COALESCE(j.end_time, '') as end_time,
+               j.status, j.created_at_ms, j.updated_at_ms, j.next_run_time, 0 as execution_count,
+               COALESCE(j.sync_state, 'synced') as sync_state,
+               CAST(EXTRACT(EPOCH FROM j.sync_updated_at) * 1000 AS BIGINT) as synced_at_ms,
+               COALESCE(j.origin, 'vehicle') as origin
         FROM jobs j
         LEFT JOIN vehicle_enrichment e ON j.vehicle_id = e.vehicle_id
         WHERE j.job_id = $1
@@ -156,10 +178,13 @@ std::optional<query::JobInfoData> SchedulerQuery::get_job(const std::string& job
     job.recurrence_rule = row.get_string(9);
     job.end_time = row.get_string(10);
     job.status = status_string_to_int(row.get_string(11));
-    job.created_at_ns = row.is_null(12) ? 0 : row.get_int64(12);
-    job.updated_at_ns = row.is_null(13) ? 0 : row.get_int64(13);
-    job.next_run_ns = 0;  // next_run_time is VARCHAR in schema
+    job.created_at_ms = row.is_null(12) ? 0 : row.get_int64(12);
+    job.updated_at_ms = row.is_null(13) ? 0 : row.get_int64(13);
     job.execution_count = row.is_null(15) ? 0 : row.get_int(15);
+    // Sync state from jobs table
+    std::string sync_state = row.is_null(16) ? "synced" : row.get_string(16);
+    job.synced_at_ms = row.is_null(17) ? 0 : row.get_int64(17);
+    job.sync_state = sync_state_to_enum(sync_state);
 
     return job;
 }
@@ -167,10 +192,13 @@ std::optional<query::JobInfoData> SchedulerQuery::get_job(const std::string& job
 std::vector<query::JobInfoData> SchedulerQuery::get_vehicle_jobs(const std::string& vehicle_id) {
     const char* sql = R"(
         SELECT j.job_id, j.vehicle_id, COALESCE(e.fleet_id, '') as fleet_id,
-               COALESCE(e.region, '') as region, j.title, j.service_name,
-               j.method_name, j.parameters, j.scheduled_time,
-               j.recurrence_rule, '' as end_time, j.status, j.created_at_ms,
-               j.updated_at_ms, j.next_run_time, 0 as execution_count
+               COALESCE(e.region, '') as region, COALESCE(j.title, '') as title, j.service_name,
+               j.method_name, COALESCE(j.parameters::text, '{}') as parameters,
+               COALESCE(j.scheduled_time, '') as scheduled_time,
+               COALESCE(j.recurrence_rule, '') as recurrence_rule, COALESCE(j.end_time, '') as end_time,
+               j.status, j.created_at_ms, j.updated_at_ms, j.next_run_time, 0 as execution_count,
+               COALESCE(j.sync_state, 'synced') as sync_state,
+               CAST(EXTRACT(EPOCH FROM j.sync_updated_at) * 1000 AS BIGINT) as synced_at_ms
         FROM jobs j
         LEFT JOIN vehicle_enrichment e ON j.vehicle_id = e.vehicle_id
         WHERE j.vehicle_id = $1
@@ -195,10 +223,12 @@ std::vector<query::JobInfoData> SchedulerQuery::get_vehicle_jobs(const std::stri
         job.recurrence_rule = row.get_string(9);
         job.end_time = row.get_string(10);
         job.status = status_string_to_int(row.get_string(11));
-        job.created_at_ns = row.is_null(12) ? 0 : row.get_int64(12);
-        job.updated_at_ns = row.is_null(13) ? 0 : row.get_int64(13);
-        job.next_run_ns = 0;  // next_run_time is VARCHAR in schema
+        job.created_at_ms = row.is_null(12) ? 0 : row.get_int64(12);
+        job.updated_at_ms = row.is_null(13) ? 0 : row.get_int64(13);
         job.execution_count = row.is_null(15) ? 0 : row.get_int(15);
+        std::string sync_state = row.is_null(16) ? "synced" : row.get_string(16);
+        job.synced_at_ms = row.is_null(17) ? 0 : row.get_int64(17);
+        job.sync_state = sync_state_to_enum(sync_state);
         jobs.push_back(std::move(job));
     }
 
