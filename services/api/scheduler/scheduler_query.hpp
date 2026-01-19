@@ -42,6 +42,7 @@ struct JobInfoData {
     int execution_count = 0;
     SyncState sync_state = SyncState::UNKNOWN;
     int64_t synced_at_ms = 0;
+    bool paused = false;
 };
 
 /// Job execution info

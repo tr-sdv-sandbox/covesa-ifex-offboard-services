@@ -8,6 +8,8 @@
 /// - Adds vehicle_id (from MQTT topic, verified by ACL)
 /// - Adds enrichment data (fleet_id, region from VehicleContext)
 /// - Adds offboard timestamps
+///
+/// Scheduler (content_id=202) uses pure state sync with passthrough.
 
 #include <csignal>
 #include <memory>
@@ -21,11 +23,9 @@
 #include "postgres_client.hpp"
 
 // Vehicle-side codecs (decode incoming)
-#include "scheduler_codec.hpp"
 #include "rpc_codec.hpp"
 
 // Offboard codecs (encode outgoing)
-#include "scheduler_offboard_codec.hpp"
 #include "rpc_offboard_codec.hpp"
 
 // MQTT flags
@@ -83,65 +83,6 @@ void signal_handler(int signum) {
     if (g_router) {
         g_router->stop();
     }
-}
-
-/// Create a transform for scheduler messages (content_id=202)
-/// Handles both sync_message_t (state sync) and scheduler_command_ack_t (command acks)
-/// Decodes vehicle proto, wraps in offboard envelope with metadata
-ifex::offboard::TransformFn make_scheduler_transform(const std::string& bridge_id) {
-    return [bridge_id](const std::string& vehicle_id,
-              uint32_t content_id,
-              const std::string& payload,
-              const std::optional<ifex::offboard::VehicleContext>& ctx)
-        -> std::optional<std::string> {
-
-        // Try to decode as sync message first (most common case)
-        auto msg = ifex::offboard::decode_scheduler_sync(payload);
-        if (msg) {
-            // Extract enrichment from context
-            std::string fleet_id, region;
-            if (ctx) {
-                fleet_id = ctx->fleet_id;
-                region = ctx->region;
-            }
-
-            // Create offboard envelope with vehicle_id and enrichment
-            std::string offboard_payload = ifex::offboard::encode_scheduler_offboard(
-                vehicle_id,
-                *msg,
-                fleet_id,
-                region,
-                bridge_id
-            );
-
-            LOG(INFO) << "Scheduler sync from " << vehicle_id
-                      << ": events=" << msg->events_size()
-                      << " active_jobs=" << msg->active_jobs_count()
-                      << " fleet=" << fleet_id
-                      << " -> offboard(" << offboard_payload.size() << " bytes)";
-
-            return offboard_payload;
-        }
-
-        // Try to decode as command ack (sent after cloud command execution)
-        auto ack = ifex::offboard::decode_scheduler_command_ack(payload);
-        if (ack) {
-            // Log the command ack but don't forward to Kafka (drop)
-            // Cloud scheduler API tracks its own commands via request correlation
-            LOG(INFO) << "Scheduler command ack from " << vehicle_id
-                      << ": command_id=" << ack->command_id()
-                      << " success=" << (ack->success() ? "true" : "false")
-                      << (ack->job_id().empty() ? "" : " job_id=" + ack->job_id())
-                      << (ack->error_message().empty() ? "" : " error=" + ack->error_message());
-
-            // Return nullopt to drop the message (don't forward to Kafka)
-            return std::nullopt;
-        }
-
-        LOG(WARNING) << "Failed to decode scheduler message from " << vehicle_id
-                     << " (" << payload.size() << " bytes) - unknown message type";
-        return std::nullopt;
-    };
 }
 
 /// Create a transform for RPC messages (content_id=200)

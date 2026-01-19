@@ -19,6 +19,7 @@ enum cloud_job_status_t {
   JOB_FAILED = 5;
   JOB_CANCELLED = 6;
   JOB_PAUSED = 7;
+  JOB_DELETING = 8;
 }
 
 // Synchronization state between cloud and vehicle
@@ -49,6 +50,7 @@ message job_info_t {
   string created_by = 15;
   sync_state_t sync_state = 16;
   uint64 synced_at_ms = 17;
+  bool paused = 18;
 }
 
 // Job execution record

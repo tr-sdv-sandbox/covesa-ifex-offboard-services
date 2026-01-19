@@ -91,7 +91,7 @@ log_info "Kafka topics created"
 # Step 4: Populate PostgreSQL with test data
 log_info "Populating PostgreSQL with $NUM_VEHICLES vehicles..."
 docker-compose exec -T postgres psql -U ifex -d ifex_offboard -q <<EOF
-TRUNCATE vehicles, vehicle_enrichment, vehicle_schemas, schema_registry, jobs, job_executions, sync_state, offboard_calendar CASCADE;
+TRUNCATE vehicles, vehicle_enrichment, vehicle_schemas, schema_registry, jobs, job_executions, sync_state CASCADE;
 
 CREATE OR REPLACE FUNCTION generate_vin(seq INTEGER) RETURNS VARCHAR AS \$\$
 BEGIN

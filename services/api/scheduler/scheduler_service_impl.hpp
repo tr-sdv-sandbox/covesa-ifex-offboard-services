@@ -1,10 +1,11 @@
 #pragma once
 
+#include <atomic>
 #include <memory>
 
 #include "cloud-scheduler-service.grpc.pb.h"
 #include "scheduler_query.hpp"
-#include "job_command_producer.hpp"
+#include "job_sync_producer.hpp"
 #include "postgres_client.hpp"
 
 namespace ifex::cloud::scheduler {
@@ -35,7 +36,7 @@ class CloudSchedulerServiceImpl final
 public:
     CloudSchedulerServiceImpl(
         std::shared_ptr<ifex::offboard::PostgresClient> db,
-        std::shared_ptr<JobCommandProducer> producer);
+        std::shared_ptr<JobSyncProducer> producer);
 
     // Create a new job on a vehicle
     grpc::Status create_job(
@@ -126,9 +127,12 @@ private:
     proto::sync_state_t map_sync_state(query::SyncState state);
 
     std::shared_ptr<ifex::offboard::PostgresClient> db_;
-    std::shared_ptr<JobCommandProducer> producer_;
+    std::shared_ptr<JobSyncProducer> producer_;
     SchedulerQuery query_;
     bool is_healthy_ = false;
+
+    // Cloud version counter for job versioning
+    std::atomic<uint64_t> cloud_seq_counter_{0};
 };
 
 }  // namespace ifex::cloud::scheduler

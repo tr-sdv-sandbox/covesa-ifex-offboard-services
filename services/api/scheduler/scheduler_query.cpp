@@ -9,13 +9,19 @@ namespace scheduler {
 namespace {
 
 /// Convert status string to integer for CloudJobStatus enum
-/// Values: 0=unknown, 1=pending/active, 2=paused, 3=completed
+/// Must match cloud_job_status_t in cloud-scheduler-service.proto:
+/// 0=JOB_UNKNOWN, 1=JOB_PENDING, 2=JOB_SCHEDULED, 3=JOB_RUNNING,
+/// 4=JOB_COMPLETED, 5=JOB_FAILED, 6=JOB_CANCELLED, 7=JOB_PAUSED, 8=JOB_DELETING
 int status_string_to_int(const std::string& status) {
-    if (status == "pending" || status == "active") return 1;
-    if (status == "paused") return 2;
-    if (status == "completed") return 3;
-    if (status == "failed") return 4;
-    return 0;  // unknown
+    if (status == "pending") return 1;   // JOB_PENDING
+    if (status == "scheduled") return 2; // JOB_SCHEDULED
+    if (status == "running") return 3;   // JOB_RUNNING
+    if (status == "completed") return 4; // JOB_COMPLETED
+    if (status == "failed") return 5;    // JOB_FAILED
+    if (status == "cancelled") return 6; // JOB_CANCELLED
+    if (status == "paused") return 7;    // JOB_PAUSED
+    if (status == "deleting") return 8;  // JOB_DELETING
+    return 0;  // JOB_UNKNOWN
 }
 
 /// Convert sync_state string from jobs table to SyncState enum
@@ -52,7 +58,8 @@ SchedulerQueryResult<query::JobInfoData> SchedulerQuery::list_jobs(
                j.status, j.created_at_ms, j.updated_at_ms, j.next_run_time, 0 as execution_count,
                COALESCE(j.sync_state, 'synced') as sync_state,
                CAST(EXTRACT(EPOCH FROM j.sync_updated_at) * 1000 AS BIGINT) as synced_at_ms,
-               COALESCE(j.origin, 'vehicle') as origin
+               COALESCE(j.origin, 'vehicle') as origin,
+               COALESCE(j.paused, false) as paused
         FROM jobs j
         LEFT JOIN vehicle_enrichment e ON j.vehicle_id = e.vehicle_id
         WHERE 1=1
@@ -133,6 +140,8 @@ SchedulerQueryResult<query::JobInfoData> SchedulerQuery::list_jobs(
         std::string sync_state = row.is_null(16) ? "synced" : row.get_string(16);
         job.synced_at_ms = row.is_null(17) ? 0 : row.get_int64(17);
         job.sync_state = sync_state_to_enum(sync_state);
+        // Paused boolean (column 19)
+        job.paused = !row.is_null(19) && (row.get_string(19) == "t" || row.get_string(19) == "true");
         query_result.items.push_back(std::move(job));
     }
 
@@ -153,7 +162,8 @@ std::optional<query::JobInfoData> SchedulerQuery::get_job(const std::string& job
                j.status, j.created_at_ms, j.updated_at_ms, j.next_run_time, 0 as execution_count,
                COALESCE(j.sync_state, 'synced') as sync_state,
                CAST(EXTRACT(EPOCH FROM j.sync_updated_at) * 1000 AS BIGINT) as synced_at_ms,
-               COALESCE(j.origin, 'vehicle') as origin
+               COALESCE(j.origin, 'vehicle') as origin,
+               COALESCE(j.paused, false) as paused
         FROM jobs j
         LEFT JOIN vehicle_enrichment e ON j.vehicle_id = e.vehicle_id
         WHERE j.job_id = $1
@@ -185,6 +195,8 @@ std::optional<query::JobInfoData> SchedulerQuery::get_job(const std::string& job
     std::string sync_state = row.is_null(16) ? "synced" : row.get_string(16);
     job.synced_at_ms = row.is_null(17) ? 0 : row.get_int64(17);
     job.sync_state = sync_state_to_enum(sync_state);
+    // Paused boolean (column 19)
+    job.paused = !row.is_null(19) && (row.get_string(19) == "t" || row.get_string(19) == "true");
 
     return job;
 }
@@ -198,7 +210,8 @@ std::vector<query::JobInfoData> SchedulerQuery::get_vehicle_jobs(const std::stri
                COALESCE(j.recurrence_rule, '') as recurrence_rule, COALESCE(j.end_time, '') as end_time,
                j.status, j.created_at_ms, j.updated_at_ms, j.next_run_time, 0 as execution_count,
                COALESCE(j.sync_state, 'synced') as sync_state,
-               CAST(EXTRACT(EPOCH FROM j.sync_updated_at) * 1000 AS BIGINT) as synced_at_ms
+               CAST(EXTRACT(EPOCH FROM j.sync_updated_at) * 1000 AS BIGINT) as synced_at_ms,
+               COALESCE(j.paused, false) as paused
         FROM jobs j
         LEFT JOIN vehicle_enrichment e ON j.vehicle_id = e.vehicle_id
         WHERE j.vehicle_id = $1
@@ -229,6 +242,8 @@ std::vector<query::JobInfoData> SchedulerQuery::get_vehicle_jobs(const std::stri
         std::string sync_state = row.is_null(16) ? "synced" : row.get_string(16);
         job.synced_at_ms = row.is_null(17) ? 0 : row.get_int64(17);
         job.sync_state = sync_state_to_enum(sync_state);
+        // Paused boolean (column 18)
+        job.paused = !row.is_null(18) && (row.get_string(18) == "t" || row.get_string(18) == "true");
         jobs.push_back(std::move(job));
     }
 

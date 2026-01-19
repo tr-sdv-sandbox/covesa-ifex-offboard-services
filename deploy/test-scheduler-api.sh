@@ -1,20 +1,23 @@
 #!/bin/bash
-# End-to-End Test: Full Scheduler Command Flow
+# End-to-End Test: Cloud Scheduler API
 #
-# Tests the complete create/pause/resume/trigger command flow:
+# Tests the Cloud Scheduler gRPC API (pure state sync model):
 #   1. Cloud Scheduler (gRPC) → Kafka → MQTT → Vehicle
-#   2. Vehicle executes command
-#   3. Vehicle sends ack → MQTT → Kafka
+#   2. Vehicle applies state change via sync message
+#   3. Vehicle confirms state via V2C_SyncMessage → MQTT → Kafka
+#
+# Note: The API methods (CreateJob, PauseJob, etc.) internally send
+# C2V_SyncMessage for state replication, not imperative commands.
 #
 # Prerequisites:
 #   - Infrastructure running (./start-infra.sh or ./test-scheduler-e2e.sh --keep)
 #   - Vehicle container running
 #   - grpcurl installed
-#   - cloud_scheduler binary built
+#   - scheduler_api binary built
 #
 # Usage:
-#   ./test-scheduler-commands.sh                    # Run all command tests
-#   ./test-scheduler-commands.sh --vehicle VIN001  # Custom vehicle ID
+#   ./test-scheduler-api.sh                    # Run all API tests
+#   ./test-scheduler-api.sh --vehicle VIN001  # Custom vehicle ID
 
 # Enable strict mode for setup only (disabled before tests)
 set -e
@@ -73,9 +76,9 @@ fail_test() {
 log_info "Checking prerequisites..."
 
 # Check cloud scheduler binary
-CLOUD_SCHEDULER="$BUILD_DIR/cloud_scheduler"
+CLOUD_SCHEDULER="$BUILD_DIR/scheduler_api"
 if [ ! -x "$CLOUD_SCHEDULER" ]; then
-    log_warn "cloud_scheduler not built, will use direct Kafka producer for testing"
+    log_warn "scheduler_api not built, will use direct Kafka producer for testing"
     USE_GRPC=false
 else
     USE_GRPC=true

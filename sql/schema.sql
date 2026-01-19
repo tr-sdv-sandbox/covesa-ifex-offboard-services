@@ -61,7 +61,8 @@ CREATE TABLE jobs (
     updated_at_ms BIGINT,
     -- Sync tracking
     origin VARCHAR(16) DEFAULT 'vehicle',     -- 'cloud' or 'vehicle'
-    sync_state VARCHAR(16) DEFAULT 'synced',  -- 'pending' (awaiting vehicle confirm), 'synced'
+    sync_state VARCHAR(16) DEFAULT 'synced',  -- 'pending', 'synced', 'rejected'
+    rejection_reason TEXT,                    -- Why vehicle rejected (when sync_state='rejected')
     created_by VARCHAR(128),                  -- User/API that created (for cloud-created)
     sync_created_at TIMESTAMPTZ DEFAULT NOW(),
     sync_updated_at TIMESTAMPTZ DEFAULT NOW(),
@@ -105,7 +106,7 @@ CREATE INDEX idx_job_executions_time ON job_executions(executed_at_ms DESC);
 -- =============================================================================
 
 -- =============================================================================
--- Sync state tracking
+-- Sync state tracking (with quiescence detection per v2.4 protocol)
 -- =============================================================================
 CREATE TABLE sync_state (
     vehicle_id VARCHAR(64) PRIMARY KEY REFERENCES vehicles(vehicle_id) ON DELETE CASCADE,
@@ -115,10 +116,15 @@ CREATE TABLE sync_state (
     scheduler_sequence BIGINT DEFAULT 0,
     scheduler_checksum BIGINT,  -- uint32_t can exceed INT_MAX
     scheduler_last_sync TIMESTAMPTZ,
+    -- Quiescence detection (Scheduler Sync Protocol v2.4 Section 5.6)
+    scheduler_cloud_checksum BIGINT,  -- Hash of cloud's current job state
+    scheduler_v2c_checksum BIGINT,    -- Last checksum received from vehicle V2C
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-COMMENT ON TABLE sync_state IS 'Per-vehicle sync sequence and checksum tracking';
+COMMENT ON TABLE sync_state IS 'Per-vehicle sync state tracking with quiescence detection (v2.4 protocol)';
+COMMENT ON COLUMN sync_state.scheduler_cloud_checksum IS 'Hash of cloud job state for this vehicle (what we compute)';
+COMMENT ON COLUMN sync_state.scheduler_v2c_checksum IS 'Last checksum received from vehicle V2C message';
 
 -- =============================================================================
 -- Kafka offset tracking (for exactly-once processing)

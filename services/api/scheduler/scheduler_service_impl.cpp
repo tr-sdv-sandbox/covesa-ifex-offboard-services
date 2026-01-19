@@ -10,7 +10,7 @@ namespace ifex::cloud::scheduler {
 
 CloudSchedulerServiceImpl::CloudSchedulerServiceImpl(
     std::shared_ptr<ifex::offboard::PostgresClient> db,
-    std::shared_ptr<JobCommandProducer> producer)
+    std::shared_ptr<JobSyncProducer> producer)
     : db_(std::move(db)),
       producer_(std::move(producer)),
       query_(db_),
@@ -37,6 +37,7 @@ std::string CloudSchedulerServiceImpl::generate_job_id() {
 }
 
 proto::cloud_job_status_t CloudSchedulerServiceImpl::map_status(int status) {
+    // No default - compiler will warn if new enum values are added
     switch (status) {
         case 0: return proto::JOB_UNKNOWN;
         case 1: return proto::JOB_PENDING;
@@ -46,8 +47,9 @@ proto::cloud_job_status_t CloudSchedulerServiceImpl::map_status(int status) {
         case 5: return proto::JOB_FAILED;
         case 6: return proto::JOB_CANCELLED;
         case 7: return proto::JOB_PAUSED;
-        default: return proto::JOB_UNKNOWN;
+        case 8: return proto::JOB_DELETING;
     }
+    return proto::JOB_UNKNOWN;
 }
 
 proto::sync_state_t CloudSchedulerServiceImpl::map_sync_state(query::SyncState state) {
@@ -154,7 +156,7 @@ grpc::Status CloudSchedulerServiceImpl::create_job(
     }
 
     std::string job_id = generate_job_id();
-    std::string command_id = generate_command_id();
+    uint64_t cloud_seq = ++cloud_seq_counter_;
 
     LOG(INFO) << "create_job: vehicle=" << req.vehicle_id()
               << " job=" << job_id
@@ -162,26 +164,26 @@ grpc::Status CloudSchedulerServiceImpl::create_job(
               << " scheduled_time_ms=" << req.scheduled_time_ms();
 
     try {
-        // Use milliseconds directly from proto
-        uint64_t scheduled_time_ms = req.scheduled_time_ms();
-        uint64_t end_time_ms = req.end_time_ms();
+        // Build job data for sync message
+        JobData job_data;
+        job_data.job_id = job_id;
+        job_data.title = req.title();
+        job_data.service = req.service();
+        job_data.method = req.method();
+        job_data.parameters_json = req.parameters_json();
+        job_data.scheduled_time_ms = req.scheduled_time_ms();
+        job_data.recurrence_rule = req.recurrence_rule();
+        job_data.end_time_ms = req.end_time_ms();
+        job_data.paused = false;
+        job_data.deleted = false;
+        job_data.cloud_seq = cloud_seq;
+        job_data.vehicle_seq = 0;
 
-        bool sent = producer_->send_create_job(
-            req.vehicle_id(),
-            command_id,
-            job_id,
-            req.title(),
-            req.service(),
-            req.method(),
-            req.parameters_json(),
-            scheduled_time_ms,
-            req.recurrence_rule(),
-            end_time_ms,
-            req.created_by());
+        // Send C2V_SyncMessage with job state
+        bool sent = producer_->send_job_sync(req.vehicle_id(), job_data);
 
         if (sent) {
             // Store job in jobs table with origin='cloud', sync_state='pending'
-            // Note: Vehicle must already exist - created via status tracking (is_online topic)
             auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::system_clock::now().time_since_epoch()).count();
 
@@ -195,9 +197,10 @@ grpc::Status CloudSchedulerServiceImpl::create_job(
                 INSERT INTO jobs (
                     vehicle_id, job_id, title, service_name, method_name,
                     parameters, scheduled_time, recurrence_rule, end_time,
-                    status, origin, sync_state, created_by, created_at_ms, updated_at_ms
+                    status, origin, sync_state, created_by, created_at_ms, updated_at_ms,
+                    cloud_seq
                 )
-                VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, 'pending', 'cloud', 'pending', $10, $11, $11)
+                VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, 'pending', 'cloud', 'pending', $10, $11, $11, $12)
                 ON CONFLICT (vehicle_id, job_id) DO UPDATE SET
                     title = EXCLUDED.title,
                     service_name = EXCLUDED.service_name,
@@ -208,6 +211,7 @@ grpc::Status CloudSchedulerServiceImpl::create_job(
                     end_time = EXCLUDED.end_time,
                     sync_state = 'pending',
                     updated_at_ms = EXCLUDED.updated_at_ms,
+                    cloud_seq = EXCLUDED.cloud_seq,
                     sync_updated_at = NOW()
             )", {
                 req.vehicle_id(),
@@ -216,11 +220,12 @@ grpc::Status CloudSchedulerServiceImpl::create_job(
                 req.service(),
                 req.method(),
                 params_json,
-                EpochMsToIso8601(scheduled_time_ms),
+                EpochMsToIso8601(job_data.scheduled_time_ms),
                 req.recurrence_rule(),
-                EpochMsToIso8601(end_time_ms),
+                EpochMsToIso8601(job_data.end_time_ms),
                 req.created_by(),
-                std::to_string(now_ms)
+                std::to_string(now_ms),
+                std::to_string(cloud_seq)
             });
 
             if (!result.ok()) {
@@ -238,7 +243,7 @@ grpc::Status CloudSchedulerServiceImpl::create_job(
         res->set_success(sent);
 
         if (!sent) {
-            res->set_error_message("Failed to send command to Kafka");
+            res->set_error_message("Failed to send sync message to Kafka");
         }
 
         return grpc::Status::OK;
@@ -261,31 +266,50 @@ grpc::Status CloudSchedulerServiceImpl::update_job(
     }
 
     try {
-        // Look up job to get vehicle_id
+        // Look up job to get vehicle_id and current state
         auto job = query_.get_job(req.job_id());
         if (!job) {
             return grpc::Status(grpc::NOT_FOUND, "Job not found");
         }
 
-        std::string command_id = generate_command_id();
+        // Query current version vector from database
+        auto version_result = db_->execute(
+            "SELECT cloud_seq, vehicle_seq FROM jobs WHERE job_id = $1",
+            {req.job_id()});
+        uint64_t current_cloud_seq = 0;
+        uint64_t current_vehicle_seq = 0;
+        if (version_result.ok() && version_result.num_rows() > 0) {
+            auto row = version_result.row(0);
+            current_cloud_seq = row.is_null(0) ? 0 : static_cast<uint64_t>(row.get_int64(0));
+            current_vehicle_seq = row.is_null(1) ? 0 : static_cast<uint64_t>(row.get_int64(1));
+        }
+
+        // Increment cloud_seq for this change
+        uint64_t new_cloud_seq = current_cloud_seq + 1;
 
         LOG(INFO) << "update_job: job=" << req.job_id()
-                  << " vehicle=" << job->vehicle_id;
+                  << " vehicle=" << job->vehicle_id
+                  << " cloud_seq=" << current_cloud_seq << "->" << new_cloud_seq
+                  << " vehicle_seq=" << current_vehicle_seq;
 
-        // Use milliseconds directly from proto
-        uint64_t scheduled_time_ms = req.scheduled_time_ms();
-        uint64_t end_time_ms = req.end_time_ms();
+        // Build job data for sync message (merge with existing values)
+        JobData job_data;
+        job_data.job_id = req.job_id();
+        job_data.title = req.title().empty() ? job->title : req.title();
+        job_data.service = job->service_name;
+        job_data.method = job->method_name;
+        job_data.parameters_json = req.parameters_json().empty() ? job->parameters_json : req.parameters_json();
+        job_data.scheduled_time_ms = req.scheduled_time_ms() == 0 ?
+            Iso8601ToEpochMs(job->scheduled_time) : req.scheduled_time_ms();
+        job_data.recurrence_rule = req.recurrence_rule().empty() ? job->recurrence_rule : req.recurrence_rule();
+        job_data.end_time_ms = req.end_time_ms();
+        job_data.paused = (job->status == 7);  // JOB_PAUSED
+        job_data.deleted = false;
+        job_data.cloud_seq = new_cloud_seq;
+        job_data.vehicle_seq = current_vehicle_seq;  // Preserve current vehicle_seq
 
-        bool sent = producer_->send_update_job(
-            job->vehicle_id,
-            command_id,
-            req.job_id(),
-            req.title(),
-            scheduled_time_ms,
-            req.recurrence_rule(),
-            req.parameters_json(),
-            end_time_ms,
-            "");  // No requester_id in proto
+        // Send C2V_SyncMessage with updated job state
+        bool sent = producer_->send_job_sync(job->vehicle_id, job_data);
 
         if (sent) {
             // Update job in DB and set sync_state='pending'
@@ -299,6 +323,7 @@ grpc::Status CloudSchedulerServiceImpl::update_job(
                     recurrence_rule = COALESCE(NULLIF($4, ''), recurrence_rule),
                     parameters = COALESCE(NULLIF($5, '{}')::jsonb, parameters),
                     end_time = COALESCE(NULLIF($6, ''), end_time),
+                    cloud_seq = $8,
                     sync_state = 'pending',
                     updated_at_ms = $7,
                     sync_updated_at = NOW()
@@ -306,11 +331,12 @@ grpc::Status CloudSchedulerServiceImpl::update_job(
             )", {
                 req.job_id(),
                 req.title(),
-                EpochMsToIso8601(scheduled_time_ms),
+                EpochMsToIso8601(req.scheduled_time_ms()),
                 req.recurrence_rule(),
                 req.parameters_json().empty() ? "{}" : req.parameters_json(),
-                EpochMsToIso8601(end_time_ms),
-                std::to_string(now_ms)
+                EpochMsToIso8601(req.end_time_ms()),
+                std::to_string(now_ms),
+                std::to_string(new_cloud_seq)
             });
 
             if (!result.ok()) {
@@ -326,7 +352,7 @@ grpc::Status CloudSchedulerServiceImpl::update_job(
         res->set_success(sent);
 
         if (!sent) {
-            res->set_error_message("Failed to send command to Kafka");
+            res->set_error_message("Failed to send sync message to Kafka");
         }
 
         return grpc::Status::OK;
@@ -352,33 +378,61 @@ grpc::Status CloudSchedulerServiceImpl::delete_job(
             return grpc::Status(grpc::NOT_FOUND, "Job not found");
         }
 
-        std::string command_id = generate_command_id();
+        // Query current version vector from database
+        auto version_result = db_->execute(
+            "SELECT cloud_seq, vehicle_seq FROM jobs WHERE job_id = $1",
+            {request->job_id()});
+        uint64_t current_cloud_seq = 0;
+        uint64_t current_vehicle_seq = 0;
+        if (version_result.ok() && version_result.num_rows() > 0) {
+            auto row = version_result.row(0);
+            current_cloud_seq = row.is_null(0) ? 0 : static_cast<uint64_t>(row.get_int64(0));
+            current_vehicle_seq = row.is_null(1) ? 0 : static_cast<uint64_t>(row.get_int64(1));
+        }
+
+        // Increment cloud_seq for this change
+        uint64_t new_cloud_seq = current_cloud_seq + 1;
 
         LOG(INFO) << "delete_job: job=" << request->job_id()
-                  << " vehicle=" << job->vehicle_id;
+                  << " vehicle=" << job->vehicle_id
+                  << " cloud_seq=" << current_cloud_seq << "->" << new_cloud_seq
+                  << " vehicle_seq=" << current_vehicle_seq;
 
-        bool sent = producer_->send_delete_job(
-            job->vehicle_id,
-            command_id,
-            request->job_id(),
-            "");  // No requester_id in proto
+        // Build job data with deleted=true
+        JobData job_data;
+        job_data.job_id = request->job_id();
+        job_data.title = job->title;
+        job_data.service = job->service_name;
+        job_data.method = job->method_name;
+        job_data.parameters_json = job->parameters_json;
+        job_data.scheduled_time_ms = Iso8601ToEpochMs(job->scheduled_time);
+        job_data.recurrence_rule = job->recurrence_rule;
+        job_data.end_time_ms = 0;
+        job_data.paused = false;
+        job_data.deleted = true;  // Mark as deleted
+        job_data.cloud_seq = new_cloud_seq;
+        job_data.vehicle_seq = current_vehicle_seq;  // Include current vehicle_seq
+
+        // Send C2V_SyncMessage with deleted flag
+        bool sent = producer_->send_job_sync(job->vehicle_id, job_data);
 
         if (sent) {
             // Mark job as pending deletion - will be removed when vehicle syncs
             db_->execute(R"(
                 UPDATE jobs SET
                     status = 'deleting',
+                    cloud_seq = $2,
                     sync_state = 'pending',
                     sync_updated_at = NOW()
                 WHERE job_id = $1
-            )", {request->job_id()});
+            )", {request->job_id(), std::to_string(new_cloud_seq)});
         }
 
         auto* res = response->mutable_result();
         res->set_success(sent);
 
         if (!sent) {
-            res->set_error_message("Failed to send command to Kafka");
+            res->set_error_message("Failed to send sync message to Kafka");
         }
 
         return grpc::Status::OK;
@@ -404,18 +458,61 @@ grpc::Status CloudSchedulerServiceImpl::pause_job(
             return grpc::Status(grpc::NOT_FOUND, "Job not found");
         }
 
-        std::string command_id = generate_command_id();
+        // Query current version vector from database
+        auto version_result = db_->execute(
+            "SELECT cloud_seq, vehicle_seq FROM jobs WHERE job_id = $1",
+            {request->job_id()});
+        uint64_t current_cloud_seq = 0;
+        uint64_t current_vehicle_seq = 0;
+        if (version_result.ok() && version_result.num_rows() > 0) {
+            auto row = version_result.row(0);
+            current_cloud_seq = row.is_null(0) ? 0 : static_cast<uint64_t>(row.get_int64(0));
+            current_vehicle_seq = row.is_null(1) ? 0 : static_cast<uint64_t>(row.get_int64(1));
+        }
 
-        LOG(INFO) << "pause_job: job=" << request->job_id();
+        // Increment cloud_seq for this change
+        uint64_t new_cloud_seq = current_cloud_seq + 1;
 
-        bool sent = producer_->send_pause_job(
-            job->vehicle_id,
-            command_id,
-            request->job_id(),
-            "");  // No requester_id in proto
+        LOG(INFO) << "pause_job: job=" << request->job_id()
+                  << " cloud_seq=" << current_cloud_seq << "->" << new_cloud_seq
+                  << " vehicle_seq=" << current_vehicle_seq;
+
+        // Build job data with paused=true
+        JobData job_data;
+        job_data.job_id = request->job_id();
+        job_data.title = job->title;
+        job_data.service = job->service_name;
+        job_data.method = job->method_name;
+        job_data.parameters_json = job->parameters_json;
+        job_data.scheduled_time_ms = Iso8601ToEpochMs(job->scheduled_time);
+        job_data.recurrence_rule = job->recurrence_rule;
+        job_data.end_time_ms = 0;
+        job_data.paused = true;  // Mark as paused
+        job_data.deleted = false;
+        job_data.cloud_seq = new_cloud_seq;
+        job_data.vehicle_seq = current_vehicle_seq;  // Include current vehicle_seq
+
+        // Send C2V_SyncMessage with paused flag
+        bool sent = producer_->send_job_sync(job->vehicle_id, job_data);
+
+        if (sent) {
+            db_->execute(R"(
+                UPDATE jobs SET
+                    status = 'paused',
+                    paused = true,
+                    cloud_seq = $2,
+                    sync_state = 'pending',
+                    sync_updated_at = NOW()
+                WHERE job_id = $1
+            )", {request->job_id(), std::to_string(new_cloud_seq)});
+        }
 
         auto* res = response->mutable_result();
         res->set_success(sent);
+
+        if (!sent) {
+            res->set_error_message("Failed to send sync message to Kafka");
+        }
 
         return grpc::Status::OK;
 
@@ -440,18 +537,61 @@ grpc::Status CloudSchedulerServiceImpl::resume_job(
             return grpc::Status(grpc::NOT_FOUND, "Job not found");
         }
 
-        std::string command_id = generate_command_id();
+        // Query current version vector from database
+        auto version_result = db_->execute(
+            "SELECT cloud_seq, vehicle_seq FROM jobs WHERE job_id = $1",
+            {request->job_id()});
+        uint64_t current_cloud_seq = 0;
+        uint64_t current_vehicle_seq = 0;
+        if (version_result.ok() && version_result.num_rows() > 0) {
+            auto row = version_result.row(0);
+            current_cloud_seq = row.is_null(0) ? 0 : static_cast<uint64_t>(row.get_int64(0));
+            current_vehicle_seq = row.is_null(1) ? 0 : static_cast<uint64_t>(row.get_int64(1));
+        }
 
-        LOG(INFO) << "resume_job: job=" << request->job_id();
+        // Increment cloud_seq for this change
+        uint64_t new_cloud_seq = current_cloud_seq + 1;
 
-        bool sent = producer_->send_resume_job(
-            job->vehicle_id,
-            command_id,
-            request->job_id(),
-            "");  // No requester_id in proto
+        LOG(INFO) << "resume_job: job=" << request->job_id()
+                  << " cloud_seq=" << current_cloud_seq << "->" << new_cloud_seq
+                  << " vehicle_seq=" << current_vehicle_seq;
+
+        // Build job data with paused=false
+        JobData job_data;
+        job_data.job_id = request->job_id();
+        job_data.title = job->title;
+        job_data.service = job->service_name;
+        job_data.method = job->method_name;
+        job_data.parameters_json = job->parameters_json;
+        job_data.scheduled_time_ms = Iso8601ToEpochMs(job->scheduled_time);
+        job_data.recurrence_rule = job->recurrence_rule;
+        job_data.end_time_ms = 0;
+        job_data.paused = false;  // Resume (not paused)
+        job_data.deleted = false;
+        job_data.cloud_seq = new_cloud_seq;
+        job_data.vehicle_seq = current_vehicle_seq;  // Include current vehicle_seq
+
+        // Send C2V_SyncMessage with paused=false
+        bool sent = producer_->send_job_sync(job->vehicle_id, job_data);
+
+        if (sent) {
+            db_->execute(R"(
+                UPDATE jobs SET
+                    status = 'scheduled',
+                    paused = false,
+                    cloud_seq = $2,
+                    sync_state = 'pending',
+                    sync_updated_at = NOW()
+                WHERE job_id = $1
+            )", {request->job_id(), std::to_string(new_cloud_seq)});
+        }
 
         auto* res = response->mutable_result();
         res->set_success(sent);
+
+        if (!sent) {
+            res->set_error_message("Failed to send sync message to Kafka");
+        }
 
         return grpc::Status::OK;
 
@@ -476,18 +616,21 @@ grpc::Status CloudSchedulerServiceImpl::trigger_job(
             return grpc::Status(grpc::NOT_FOUND, "Job not found");
         }
 
-        std::string command_id = generate_command_id();
+        LOG(INFO) << "trigger_job: job=" << request->job_id()
+                  << " vehicle=" << job->vehicle_id;
 
-        LOG(INFO) << "trigger_job: job=" << request->job_id();
-
+        // Send TriggerJobRequest - the only imperative command
         bool sent = producer_->send_trigger_job(
             job->vehicle_id,
-            command_id,
             request->job_id(),
-            "");  // No requester_id in proto
+            "cloud-scheduler");  // requester_id
 
         auto* res = response->mutable_result();
         res->set_success(sent);
+
+        if (!sent) {
+            res->set_error_message("Failed to send trigger request to Kafka");
+        }
 
         return grpc::Status::OK;
 
@@ -531,6 +674,7 @@ grpc::Status CloudSchedulerServiceImpl::get_job(
         j->set_updated_at_ms(job->updated_at_ms);
         j->set_sync_state(map_sync_state(job->sync_state));
         j->set_synced_at_ms(job->synced_at_ms);
+        j->set_paused(job->paused);
 
         return grpc::Status::OK;
 
@@ -589,6 +733,7 @@ grpc::Status CloudSchedulerServiceImpl::list_jobs(
             j->set_updated_at_ms(job.updated_at_ms);
             j->set_sync_state(map_sync_state(job.sync_state));
             j->set_synced_at_ms(job.synced_at_ms);
+            j->set_paused(job.paused);
         }
 
         res->set_total_count(result.total_count);
@@ -671,10 +816,6 @@ grpc::Status CloudSchedulerServiceImpl::create_fleet_job(
     LOG(INFO) << "create_fleet_job: " << req.vehicle_ids().size() << " vehicles"
               << " method=" << req.service() << "." << req.method();
 
-    // Use milliseconds directly from proto
-    uint64_t scheduled_time_ms = req.scheduled_time_ms();
-    uint64_t end_time_ms = req.end_time_ms();
-
     int success_count = 0;
     int fail_count = 0;
 
@@ -683,20 +824,25 @@ grpc::Status CloudSchedulerServiceImpl::create_fleet_job(
 
         for (const auto& vehicle_id : req.vehicle_ids()) {
             std::string job_id = generate_job_id();
-            std::string command_id = generate_command_id();
+            uint64_t cloud_seq = ++cloud_seq_counter_;
 
-            bool sent = producer_->send_create_job(
-                vehicle_id,
-                command_id,
-                job_id,
-                req.title(),
-                req.service(),
-                req.method(),
-                req.parameters_json(),
-                scheduled_time_ms,
-                req.recurrence_rule(),
-                end_time_ms,
-                req.created_by());
+            // Build job data for sync message
+            JobData job_data;
+            job_data.job_id = job_id;
+            job_data.title = req.title();
+            job_data.service = req.service();
+            job_data.method = req.method();
+            job_data.parameters_json = req.parameters_json();
+            job_data.scheduled_time_ms = req.scheduled_time_ms();
+            job_data.recurrence_rule = req.recurrence_rule();
+            job_data.end_time_ms = req.end_time_ms();
+            job_data.paused = false;
+            job_data.deleted = false;
+            job_data.cloud_seq = cloud_seq;
+            job_data.vehicle_seq = 0;
+
+            // Send C2V_SyncMessage
+            bool sent = producer_->send_job_sync(vehicle_id, job_data);
 
             auto* result = res->add_results();
             result->set_vehicle_id(vehicle_id);
@@ -707,7 +853,7 @@ grpc::Status CloudSchedulerServiceImpl::create_fleet_job(
                 success_count++;
             } else {
                 fail_count++;
-                result->set_error_message("Failed to send to Kafka");
+                result->set_error_message("Failed to send sync message to Kafka");
             }
         }
 
@@ -747,13 +893,25 @@ grpc::Status CloudSchedulerServiceImpl::delete_fleet_job(
                 continue;
             }
 
-            std::string command_id = generate_command_id();
+            uint64_t cloud_seq = ++cloud_seq_counter_;
 
-            bool sent = producer_->send_delete_job(
-                job->vehicle_id,
-                command_id,
-                job_id,
-                "");  // No requester_id in proto
+            // Build job data with deleted=true
+            JobData job_data;
+            job_data.job_id = job_id;
+            job_data.title = job->title;
+            job_data.service = job->service_name;
+            job_data.method = job->method_name;
+            job_data.parameters_json = job->parameters_json;
+            job_data.scheduled_time_ms = Iso8601ToEpochMs(job->scheduled_time);
+            job_data.recurrence_rule = job->recurrence_rule;
+            job_data.end_time_ms = 0;
+            job_data.paused = false;
+            job_data.deleted = true;  // Mark as deleted
+            job_data.cloud_seq = cloud_seq;
+            job_data.vehicle_seq = 0;
+
+            // Send C2V_SyncMessage with deleted flag
+            bool sent = producer_->send_job_sync(job->vehicle_id, job_data);
 
             if (sent) {
                 success_count++;

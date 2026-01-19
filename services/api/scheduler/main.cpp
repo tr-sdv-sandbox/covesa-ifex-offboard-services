@@ -10,7 +10,7 @@
 
 #include "postgres_client.hpp"
 #include "scheduler_service_impl.hpp"
-#include "job_command_producer.hpp"
+#include "job_sync_producer.hpp"
 
 // gRPC flags
 DEFINE_string(grpc_listen, "0.0.0.0:50083", "gRPC listen address");
@@ -64,18 +64,18 @@ int main(int argc, char* argv[]) {
     }
     LOG(INFO) << "Connected to PostgreSQL";
 
-    // Create job command producer
-    ifex::cloud::scheduler::JobCommandProducerConfig producer_config;
+    // Create job sync producer (pure state sync model)
+    ifex::cloud::scheduler::JobSyncProducerConfig producer_config;
     producer_config.brokers = FLAGS_kafka_broker;
     producer_config.topic = FLAGS_kafka_topic_c2v;
     producer_config.client_id = "cloud-scheduler-producer";
 
-    auto producer = std::make_shared<ifex::cloud::scheduler::JobCommandProducer>(producer_config);
+    auto producer = std::make_shared<ifex::cloud::scheduler::JobSyncProducer>(producer_config);
     if (!producer->init()) {
-        LOG(ERROR) << "Failed to initialize job command producer";
+        LOG(ERROR) << "Failed to initialize job sync producer";
         return 1;
     }
-    LOG(INFO) << "Job command producer initialized";
+    LOG(INFO) << "Job sync producer initialized";
 
     // Create service implementation (inherits from all IFEX service classes)
     auto service_impl = std::make_unique<ifex::cloud::scheduler::CloudSchedulerServiceImpl>(
@@ -130,7 +130,8 @@ int main(int argc, char* argv[]) {
     // Print final stats
     const auto& stats = producer->stats();
     LOG(INFO) << "Final stats:";
-    LOG(INFO) << "  commands_sent=" << stats.commands_sent;
+    LOG(INFO) << "  sync_messages_sent=" << stats.sync_messages_sent;
+    LOG(INFO) << "  trigger_requests_sent=" << stats.trigger_requests_sent;
     LOG(INFO) << "  send_errors=" << stats.send_errors;
 
     LOG(INFO) << "Cloud Scheduler Service shutdown complete";

@@ -6,6 +6,7 @@
 // Key features:
 // - Version vectors for conflict detection (no wall-clock dependency)
 // - Source authority for deterministic conflict resolution
+// - Checksum-based quiescence (no traffic when in sync)
 // - Append-only execution history
 // - Offline support on both sides
 //
@@ -34,41 +35,31 @@ message JobVersion {
 
 // Who is authoritative for conflicts on this job.
 // Set at creation time, immutable thereafter.
+// NOTE: Authority is mandatory - every job must have one set at creation.
 enum JobAuthority {
-    AUTHORITY_UNKNOWN = 0;
-    AUTHORITY_CLOUD = 1;        // Cloud wins conflicts (job created by cloud)
-    AUTHORITY_VEHICLE = 2;      // Vehicle wins conflicts (job created on vehicle/phone)
+    AUTHORITY_CLOUD = 0;        // Cloud wins conflicts (job created by cloud)
+    AUTHORITY_VEHICLE = 1;      // Vehicle wins conflicts (job created on vehicle/phone)
 }
 
-// Synchronization state between cloud and vehicle.
-enum SyncState {
-    SYNC_STATE_UNKNOWN = 0;
-    SYNC_STATE_PENDING = 1;     // Change made locally, not yet confirmed by remote
-    SYNC_STATE_SYNCED = 2;      // Both sides agree on version (steady state)
-    SYNC_STATE_CONFLICT = 3;    // Conflict detected, resolution in progress
-}
-
-// Job execution status.
+// Job execution status (vehicle-authoritative, not synced).
 enum JobStatus {
-    JOB_STATUS_UNKNOWN = 0;
-    JOB_STATUS_PENDING = 1;     // Waiting to execute
-    JOB_STATUS_RUNNING = 2;     // Currently executing
-    JOB_STATUS_COMPLETED = 3;   // Finished successfully
-    JOB_STATUS_FAILED = 4;      // Execution failed
-    JOB_STATUS_CANCELLED = 5;   // Cancelled by user/system
-    JOB_STATUS_PAUSED = 6;      // Temporarily paused
+    JOB_STATUS_PENDING = 0;     // Waiting to execute
+    JOB_STATUS_RUNNING = 1;     // Currently executing
+    JOB_STATUS_COMPLETED = 2;   // Finished successfully
+    JOB_STATUS_FAILED = 3;      // Execution failed
+    JOB_STATUS_CANCELLED = 4;   // Cancelled by user/system
 }
 
 // Vehicle wake behavior for scheduled jobs.
 enum WakePolicy {
-    WAKE_POLICY_NO_WAKE = 0;            // Only run if vehicle already awake
-    WAKE_POLICY_WAKE_REQUIRED = 1;      // Wake vehicle via RTC to run job
+    WAKE_NO_WAKE = 0;           // Only run if vehicle already awake
+    WAKE_REQUIRED = 1;          // Wake vehicle via RTC to run job
 }
 
 // Vehicle sleep behavior during job execution.
 enum SleepPolicy {
-    SLEEP_POLICY_NORMAL = 0;            // Normal sleep after job
-    SLEEP_POLICY_INHIBIT_UNTIL_COMPLETE = 1;  // Prevent sleep until done
+    SLEEP_NORMAL = 0;           // Normal sleep after job
+    SLEEP_INHIBIT = 1;          // Prevent sleep until job complete
 }
 
 // =============================================================================
@@ -81,15 +72,14 @@ message JobRecord {
     string job_id = 1;                  // Namespaced: "cloud-*", "veh-VIN-*", "phone-*"
     JobAuthority authority = 2;         // Who wins conflicts (immutable after creation)
 
-    // --- Version ---
+    // --- Version (for sync protocol) ---
     JobVersion version = 3;             // Version vector
-    SyncState sync_state = 4;           // Current sync state
 
     // --- Lifecycle ---
     bool deleted = 5;                   // Soft delete (tombstone)
-    uint64 deleted_at_ms = 6;           // When deleted (for tombstone expiry)
+    uint64 deleted_at_ms = 6;           // When deleted (for GC)
 
-    // --- Content (job definition) ---
+    // --- Content (included in checksum) - user intent, synced ---
     string title = 10;                  // Human-readable title
     string service = 11;                // Target service name
     string method = 12;                 // Target method name
@@ -97,18 +87,17 @@ message JobRecord {
     uint64 scheduled_time_ms = 14;      // When to run (epoch ms)
     string recurrence_rule = 15;        // iCal RRULE for recurring jobs
     uint64 end_time_ms = 16;            // Stop recurring after this (0 = forever)
+    bool paused = 17;                   // User intent: "don't schedule this job"
+    WakePolicy wake_policy = 18;        // Whether to wake vehicle for this job
+    SleepPolicy sleep_policy = 19;      // Sleep behavior during execution
+    uint32 wake_lead_time_s = 20;       // Seconds before scheduled_time to wake
 
-    // --- Execution state (vehicle-authoritative) ---
-    JobStatus status = 20;              // Current execution status
-    uint64 next_run_time_ms = 21;       // Next scheduled run
-    uint64 last_executed_ms = 22;       // Last execution timestamp
+    // --- Execution state (vehicle-authoritative, NOT in checksum) ---
+    JobStatus status = 25;              // What's happening now
+    uint64 next_run_time_ms = 26;       // Next scheduled run
+    uint64 last_executed_ms = 27;       // Last execution timestamp
 
-    // --- Power management ---
-    WakePolicy wake_policy = 25;        // Whether to wake vehicle
-    SleepPolicy sleep_policy = 26;      // Sleep behavior during execution
-    uint32 wake_lead_time_s = 27;       // Seconds before scheduled_time to wake
-
-    // --- Metadata ---
+    // --- Metadata (NOT in checksum) ---
     uint64 created_at_ms = 30;          // Creation timestamp
     uint64 updated_at_ms = 31;          // Last update timestamp
     string created_by = 32;             // User/system that created job
@@ -134,64 +123,47 @@ message ExecutionRecord {
 // Sync Messages
 // =============================================================================
 
-// Cloud → Vehicle sync message.
+// Cloud -> Vehicle sync message.
 message C2V_SyncMessage {
     string vehicle_id = 1;              // Target vehicle
-    repeated JobRecord jobs = 2;        // Job records (full state)
-    repeated string deleted_job_ids = 3; // Tombstones (job_id only, for expiry)
-    uint64 sync_timestamp_ms = 4;       // When this message was created
-    string sync_id = 5;                 // Unique ID for this sync (for ack)
+    repeated JobRecord jobs = 2;        // All jobs: active AND tombstones (deleted=true)
+    uint64 sync_timestamp_ms = 3;       // When this message was created
+
+    // Checksum-based quiescence detection
+    uint64 state_checksum = 10;         // xxHash64 of current state
+    uint64 last_seen_v2c_checksum = 11; // "I've seen your state up to this checksum"
 }
 
-// Vehicle → Cloud sync message.
+// Vehicle -> Cloud sync message.
 message V2C_SyncMessage {
     string vehicle_id = 1;              // Source vehicle
     string bridge_instance_id = 2;      // Sync bridge instance (for restart detection)
-    repeated JobRecord jobs = 3;        // Job records (full state)
-    repeated string deleted_job_ids = 4; // Tombstones
-    repeated ExecutionRecord executions = 5; // New executions since last sync
-    uint64 sync_timestamp_ms = 6;       // When this message was created
-    string sync_id = 7;                 // Unique ID for this sync (for ack)
-}
+    repeated JobRecord jobs = 3;        // All jobs: active AND tombstones (deleted=true)
+    repeated ExecutionRecord executions = 4;  // New executions since last sync
+    uint64 sync_timestamp_ms = 5;       // When this message was created
 
-// Conflict resolution record (for visibility/debugging).
-message ConflictResolution {
-    string job_id = 1;                  // Job that had conflict
-    JobVersion local_version = 2;       // Local version before resolution
-    JobVersion remote_version = 3;      // Remote version before resolution
-    JobVersion resolved_version = 4;    // Merged version after resolution
-    string winner = 5;                  // "cloud" or "vehicle"
-    string reason = 6;                  // Why this side won (e.g., "authority")
-}
-
-// Sync acknowledgment.
-message SyncAck {
-    string sync_id = 1;                 // ID of sync being acknowledged
-    bool success = 2;                   // Overall success
-    repeated ConflictResolution conflicts = 3; // Conflicts that were resolved
-    uint64 ack_timestamp_ms = 4;        // When ack was created
-    string error_message = 5;           // Error details if !success
+    // Checksum-based quiescence detection
+    uint64 state_checksum = 10;         // xxHash64 of current state
+    uint64 last_seen_c2v_checksum = 11; // "I've seen your state up to this checksum"
 }
 
 // =============================================================================
-// Sync Control Messages
+// Trigger Command (the only imperative command - not state sync)
 // =============================================================================
 
-// Request full sync (e.g., after long offline period or checksum mismatch).
-message FullSyncRequest {
-    string vehicle_id = 1;
-    string reason = 2;                  // Why full sync is needed
+// Request to immediately execute a job (bypassing schedule).
+// This is the ONLY command in the protocol - everything else is state sync.
+message TriggerJobRequest {
+    string job_id = 1;                  // Job to trigger
+    string requester_id = 2;            // Who requested the trigger (for audit)
+    uint64 timestamp_ms = 3;            // When request was made
+    uint64 expires_at_ms = 4;           // Request expires after this (0 = no expiry)
 }
 
-// Sync status query.
-message SyncStatusRequest {
-    string vehicle_id = 1;
-}
-
-message SyncStatusResponse {
-    string vehicle_id = 1;
-    uint32 job_count = 2;               // Number of active jobs
-    uint32 pending_sync_count = 3;      // Jobs waiting for sync confirmation
-    uint64 last_sync_ms = 4;            // Last successful sync timestamp
-    uint32 state_checksum = 5;          // CRC32 of current state (for validation)
+// Response to trigger request.
+message TriggerJobResponse {
+    string job_id = 1;                  // Job that was triggered
+    bool accepted = 2;                  // Whether job will run
+    string error_message = 3;           // Why not accepted (if !accepted)
+    uint64 timestamp_ms = 4;            // When response was created
 }

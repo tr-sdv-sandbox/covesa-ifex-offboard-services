@@ -40,6 +40,9 @@ namespaces:
           - name: JOB_PAUSED
             value: 7
             description: Temporarily paused
+          - name: JOB_DELETING
+            value: 8
+            description: Pending deletion from vehicle
 
       - name: sync_state_t
         datatype: uint8
@@ -110,6 +113,10 @@ namespaces:
           - name: synced_at_ms
             datatype: uint64
             description: When vehicle last confirmed this job
+            mandatory: false
+          - name: paused
+            datatype: boolean
+            description: Whether job scheduling is paused
             mandatory: false
 
       - name: execution_info_t

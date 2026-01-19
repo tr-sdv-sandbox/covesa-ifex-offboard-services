@@ -2086,8 +2086,8 @@ ${data.error || 'No error details'}
                     // Render job events in slot
                     let jobsHtml = slotJobs.map((job, idx) => {
                         const jobIdx = calendarJobs.indexOf(job);
-                        const statusClass = job.job_status === 'paused' ? 'paused' : (job.sync_state || '');
-                        const statusLabel = job.job_status === 'paused' ? ' (paused)' : '';
+                        const statusClass = job.paused ? 'paused' : (job.sync_state || '');
+                        const statusLabel = job.paused ? ' (paused)' : '';
                         const displayTitle = (job.title || job.service_name + '.' + job.method_name).replace(/"/g, '&quot;');
                         return `
                         <div class="calendar-event ${statusClass}"
@@ -2531,7 +2531,7 @@ Status: ${syncInfo}</div>`;
             recurrenceEl.value = job.recurrence_rule || '';
 
             // Pause button label
-            const isPaused = job.job_status === 'paused' || job.status === 'paused';
+            const isPaused = job.paused === true;
             document.getElementById('btn-pause-job').textContent = isPaused ? 'Resume' : 'Pause';
 
             // Clear previous result
@@ -2767,7 +2767,7 @@ Status: ${syncInfo}</div>`;
         }
 
         async function togglePauseJob() {
-            const isPaused = currentJob?.job_status === 'paused' || currentJob?.status === 'paused';
+            const isPaused = currentJob?.paused === true;
             await sendJobCommand(isPaused ? 'RESUME_JOB' : 'PAUSE_JOB');
         }
 

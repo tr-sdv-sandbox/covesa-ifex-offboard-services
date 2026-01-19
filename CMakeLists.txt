@@ -107,11 +107,10 @@ target_link_libraries(postgres_client PUBLIC
 )
 
 # Envelope codec library
-# Note: discovery_codec and discovery_offboard_codec removed - discovery uses passthrough
+# Note: discovery_codec removed - discovery uses passthrough
+# Note: scheduler_codec removed - scheduler uses pure state sync (scheduler-sync-v2.proto)
 add_library(envelope_codec STATIC
-    libs/envelope_codec/src/scheduler_codec.cpp
     libs/envelope_codec/src/rpc_codec.cpp
-    libs/envelope_codec/src/scheduler_offboard_codec.cpp
     libs/envelope_codec/src/rpc_offboard_codec.cpp
 )
 target_include_directories(envelope_codec PUBLIC
@@ -162,6 +161,16 @@ endif()
 # Offboard Platform library (OffboardTransport abstraction)
 add_subdirectory(libs/offboard-platform)
 
+# ifex-scheduler library (from covesa-ifex-core - relative path)
+# Provides canonical job hash computation for Scheduler Sync Protocol v2
+set(IFEX_SCHEDULER_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../covesa-ifex-core/libs/scheduler")
+if(EXISTS "${IFEX_SCHEDULER_DIR}/CMakeLists.txt")
+    add_subdirectory("${IFEX_SCHEDULER_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/ifex-scheduler")
+else()
+    message(FATAL_ERROR "ifex-scheduler library not found at ${IFEX_SCHEDULER_DIR}. "
+                        "Ensure covesa-ifex-core is cloned alongside this repo.")
+endif()
+
 # =============================================================================
 # Ingestion Services (Vehicle → Cloud)
 # =============================================================================
@@ -199,7 +208,7 @@ target_link_libraries(discovery_mirror PRIVATE
     nlohmann_json::nlohmann_json
 )
 
-# Scheduler Mirror service
+# Scheduler Mirror service (uses pure state sync via scheduler-sync-v2.proto)
 add_executable(scheduler_mirror
     services/ingestion/scheduler_mirror/main.cpp
     services/ingestion/scheduler_mirror/scheduler_store.cpp
@@ -210,7 +219,8 @@ target_include_directories(scheduler_mirror PRIVATE
 target_link_libraries(scheduler_mirror PRIVATE
     kafka_client
     postgres_client
-    envelope_codec
+    ifex_offboard_proto
+    ifex-scheduler
     glog::glog
     gflags
 )
@@ -277,7 +287,7 @@ add_executable(scheduler_api
     services/api/scheduler/main.cpp
     services/api/scheduler/scheduler_service_impl.cpp
     services/api/scheduler/scheduler_query.cpp
-    services/api/scheduler/job_command_producer.cpp
+    services/api/scheduler/job_sync_producer.cpp
 )
 target_include_directories(scheduler_api PRIVATE
     services/api/scheduler

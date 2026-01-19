@@ -32,7 +32,6 @@
 #include <grpcpp/grpcpp.h>
 #include "cloud-scheduler-service.grpc.pb.h"
 #include "cloud-dispatcher-service.grpc.pb.h"
-#include "scheduler-command-envelope.pb.h"
 #include "postgres_client.hpp"
 #include "e2e_test_fixture.hpp"
 #include <nlohmann/json.hpp>
@@ -41,7 +40,6 @@
 namespace proto = swdv::cloud_scheduler_service;
 namespace dispatcher_proto = swdv::cloud_dispatcher_service;
 using ifex::offboard::test::E2ETestInfrastructure;
-namespace cmd_pb = swdv::scheduler_command_envelope;
 using json = nlohmann::json;
 
 using namespace std::chrono_literals;

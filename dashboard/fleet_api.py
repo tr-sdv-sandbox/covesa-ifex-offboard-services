@@ -947,8 +947,10 @@ def get_calendar(vehicle_id):
         # Map sync_state enum to string (matches proto sync_state_t)
         # 0=SYNC_UNKNOWN, 1=SYNC_PENDING, 2=SYNC_CONFIRMED, 3=SYNC_FAILED, 4=SYNC_OUT_OF_SYNC
         sync_state_map = {0: 'unknown', 1: 'pending', 2: 'synced', 3: 'failed', 4: 'out_of_sync'}
-        # Map job status enum to string
-        status_map = {0: 'unknown', 1: 'scheduled', 2: 'running', 3: 'completed', 4: 'failed', 5: 'paused', 6: 'cancelled'}
+        # Map job status enum to string (matches cloud_job_status_t in cloud-scheduler-service.proto)
+        # 0=JOB_UNKNOWN, 1=JOB_PENDING, 2=JOB_SCHEDULED, 3=JOB_RUNNING,
+        # 4=JOB_COMPLETED, 5=JOB_FAILED, 6=JOB_CANCELLED, 7=JOB_PAUSED, 8=JOB_DELETING
+        status_map = {0: 'unknown', 1: 'pending', 2: 'scheduled', 3: 'running', 4: 'completed', 5: 'failed', 6: 'cancelled', 7: 'paused', 8: 'deleting'}
 
         for job in result.jobs:
             calendar.append({
@@ -968,7 +970,8 @@ def get_calendar(vehicle_id):
                 'created_at': epoch_ms_to_iso8601(job.created_at_ms),
                 'created_at_ms': job.created_at_ms,
                 'synced_at': epoch_ms_to_iso8601(job.synced_at_ms) if job.synced_at_ms else None,
-                'synced_at_ms': job.synced_at_ms
+                'synced_at_ms': job.synced_at_ms,
+                'paused': job.paused
             })
 
         # Sort by scheduled_time
@@ -1005,7 +1008,7 @@ def create_calendar_entry(vehicle_id):
     Create a calendar entry for a vehicle via scheduler_api gRPC service
 
     The scheduler_api handles all routing (online/offline vehicle handling).
-    We also store in offboard_calendar for dashboard tracking.
+    Jobs are stored in the jobs table with origin='cloud' and sync_state tracking.
 
     Request body:
     {
@@ -1086,37 +1089,8 @@ def create_calendar_entry(vehicle_id):
     except Exception as e:
         sync_error = str(e)
 
-    # Store in offboard_calendar for dashboard tracking (with job_id from scheduler)
-    if job_id:
-        try:
-            cur.execute("""
-                INSERT INTO offboard_calendar
-                (vehicle_id, job_id, title, service_name, method_name, parameters,
-                 scheduled_time, recurrence_rule, end_time,
-                 wake_policy, sleep_policy, wake_lead_time_s,
-                 sync_status, synced_at, created_by)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), %s)
-                ON CONFLICT (job_id) DO UPDATE SET sync_status = 'synced', synced_at = NOW()
-            """, (
-                vehicle_id,
-                job_id,
-                data.get('title', f"{data['service_name']}.{data['method_name']}"),
-                data['service_name'],
-                data['method_name'],
-                json.dumps(data.get('parameters', {})),
-                scheduled_time,
-                data.get('recurrence_rule'),
-                data.get('end_time'),
-                data.get('wake_policy', 0),
-                data.get('sleep_policy', 0),
-                data.get('wake_lead_time_s', 0),
-                sync_status,
-                data.get('created_by', 'fleet_dashboard')
-            ))
-            conn.commit()
-        except Exception as e:
-            # Log but don't fail - gRPC call succeeded
-            print(f"Warning: Failed to store in offboard_calendar: {e}")
+    # Note: Jobs are stored in the jobs table by scheduler_api with origin='cloud'
+    # and sync_state tracking. No separate offboard_calendar table needed.
 
     cur.close()
     conn.close()
@@ -1248,57 +1222,8 @@ def send_calendar_command(vehicle_id):
     except Exception as e:
         return jsonify({'error': f'Failed to send command: {str(e)}'}), 500
 
-    # Update offboard_calendar if applicable
-    conn = get_db_connection()
-    cur = conn.cursor()
-
-    try:
-        if command_type_normalized == 'update_job':
-            # Update offboard_calendar with new values
-            updates = []
-            params = []
-            if 'scheduled_time' in data:
-                updates.append("scheduled_time = %s")
-                params.append(data['scheduled_time'])
-            if 'parameters' in data:
-                updates.append("parameters = %s")
-                params.append(json.dumps(data['parameters']))
-            elif 'parameters_json' in data:
-                updates.append("parameters = %s")
-                params.append(data['parameters_json'])
-            if 'recurrence_rule' in data:
-                updates.append("recurrence_rule = %s")
-                params.append(data['recurrence_rule'])
-            if 'title' in data:
-                updates.append("title = %s")
-                params.append(data['title'])
-
-            if updates:
-                updates.append("updated_at = NOW()")
-                params.extend([vehicle_id, job_id])
-                cur.execute(f"""
-                    UPDATE offboard_calendar
-                    SET {', '.join(updates)}
-                    WHERE vehicle_id = %s AND job_id = %s
-                """, params)
-                conn.commit()
-
-        elif command_type_normalized == 'delete_job':
-            # Remove from offboard_calendar
-            cur.execute("""
-                DELETE FROM offboard_calendar
-                WHERE vehicle_id = %s AND job_id = %s
-            """, (vehicle_id, job_id))
-            conn.commit()
-
-    except Exception as e:
-        conn.rollback()
-        # Log but don't fail - gRPC command was sent
-        print(f"Warning: Failed to update offboard_calendar: {e}")
-
-    finally:
-        cur.close()
-        conn.close()
+    # Note: scheduler_api updates the jobs table directly with sync tracking.
+    # No separate offboard_calendar table needed.
 
     return jsonify({
         'job_id': job_id,
@@ -1311,32 +1236,13 @@ def send_calendar_command(vehicle_id):
 @app.route('/api/calendar/<vehicle_id>/<job_id>', methods=['DELETE'])
 def delete_calendar_entry(vehicle_id, job_id):
     """Delete a calendar entry via scheduler_api gRPC service"""
+    # Check vehicle online status
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-
-    # Check if it's in offboard_calendar (not yet synced)
-    cur.execute("""
-        SELECT id, sync_status FROM offboard_calendar
-        WHERE vehicle_id = %s AND job_id = %s
-    """, (vehicle_id, job_id))
-    offboard_entry = cur.fetchone()
-
-    if offboard_entry and offboard_entry['sync_status'] == 'pending':
-        # Just delete from offboard_calendar (wasn't synced yet)
-        cur.execute("""
-            DELETE FROM offboard_calendar WHERE job_id = %s
-        """, (job_id,))
-        conn.commit()
-        cur.close()
-        conn.close()
-        return jsonify({'job_id': job_id, 'status': 'deleted', 'source': 'offboard'})
-
-    # Check vehicle online status
     cur.execute("""
         SELECT is_online FROM vehicles WHERE vehicle_id = %s
     """, (vehicle_id,))
     vehicle = cur.fetchone()
-
     cur.close()
     conn.close()
 

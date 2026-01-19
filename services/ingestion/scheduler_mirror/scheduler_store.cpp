@@ -1,56 +1,83 @@
 #include "scheduler_store.hpp"
 
+#include "job.hpp"
+#include "job_hash.hpp"
+
 #include <glog/logging.h>
-#include <unordered_map>
-#include <unordered_set>
 #include <ctime>
+#include <functional>
 #include <sstream>
 #include <iomanip>
+#include <algorithm>
 
 namespace ifex::offboard {
 
-// Parse ISO8601 datetime string to epoch milliseconds
-// Handles formats: "2026-01-09T17:00:00.000Z" and "2026-01-09 17:00:00+00"
-static uint64_t Iso8601ToEpochMs(const std::string& iso_str) {
-    if (iso_str.empty()) {
+namespace sched_lib = ifex::scheduler;
+
+// Parse ISO 8601 timestamp string to epoch milliseconds
+// Handles formats like: 2026-01-13T01:00:00.000Z or 2026-01-13 01:00:00
+static uint64_t parse_timestamp_to_ms(const std::string& timestamp_str) {
+    if (timestamp_str.empty()) {
         return 0;
     }
 
     std::tm tm = {};
-    std::istringstream ss(iso_str);
+    std::string str = timestamp_str;
 
-    // Try parsing with T delimiter: 2026-01-09T17:00:00
-    ss >> std::get_time(&tm, "%Y-%m-%dT%H:%M:%S");
-    if (ss.fail()) {
-        // Try parsing with space delimiter: 2026-01-09 17:00:00
-        ss.clear();
-        ss.str(iso_str);
-        ss >> std::get_time(&tm, "%Y-%m-%d %H:%M:%S");
-        if (ss.fail()) {
-            LOG(WARNING) << "Failed to parse ISO8601 datetime: " << iso_str;
-            return 0;
-        }
+    // Replace 'T' with space if present (ISO 8601)
+    size_t t_pos = str.find('T');
+    if (t_pos != std::string::npos) {
+        str[t_pos] = ' ';
     }
 
-    // Convert to epoch seconds (UTC)
-    time_t epoch_sec = timegm(&tm);
-    if (epoch_sec == -1) {
-        LOG(WARNING) << "Failed to convert to epoch: " << iso_str;
+    // Remove timezone suffix (.000Z or Z)
+    size_t dot_pos = str.find('.');
+    if (dot_pos != std::string::npos) {
+        str = str.substr(0, dot_pos);
+    }
+    size_t z_pos = str.find('Z');
+    if (z_pos != std::string::npos) {
+        str = str.substr(0, z_pos);
+    }
+
+    std::istringstream ss(str);
+    ss >> std::get_time(&tm, "%Y-%m-%d %H:%M:%S");
+    if (ss.fail()) {
+        LOG(WARNING) << "Failed to parse timestamp: " << timestamp_str;
         return 0;
     }
 
-    // Parse optional milliseconds
-    uint64_t ms = 0;
-    char c;
-    if (ss >> c && c == '.') {
-        int frac;
-        ss >> frac;
-        std::string remaining = std::to_string(frac);
-        while (remaining.length() < 3) remaining += "0";
-        ms = std::stoull(remaining.substr(0, 3));
-    }
+    return static_cast<uint64_t>(timegm(&tm)) * 1000;
+}
 
-    return static_cast<uint64_t>(epoch_sec) * 1000 + ms;
+// Helper to create a library Job struct from parameters (for hash computation)
+static sched_lib::Job make_job_for_hash(
+    const std::string& job_id,
+    const std::string& title,
+    const std::string& service_name,
+    const std::string& method_name,
+    const std::string& parameters,
+    uint64_t scheduled_time_ms,
+    const std::string& recurrence_rule,
+    uint64_t end_time_ms,
+    bool paused,
+    int wake_policy,
+    int sleep_policy,
+    uint32_t wake_lead_time_s) {
+    sched_lib::Job job;
+    job.job_id = job_id;
+    job.title = title;
+    job.service = service_name;
+    job.method = method_name;
+    job.parameters_json = parameters;
+    job.scheduled_time_ms = scheduled_time_ms;
+    job.recurrence_rule = recurrence_rule;
+    job.end_time_ms = end_time_ms;
+    job.paused = paused;
+    job.wake_policy = static_cast<sched_lib::WakePolicy>(wake_policy);
+    job.sleep_policy = static_cast<sched_lib::SleepPolicy>(sleep_policy);
+    job.wake_lead_time_s = wake_lead_time_s;
+    return job;
 }
 
 SchedulerStore::SchedulerStore(std::shared_ptr<PostgresClient> db)
@@ -77,53 +104,44 @@ bool SchedulerStore::process_v2_sync_message(
     const std::string& region,
     const swdv::scheduler_sync_v2::V2C_SyncMessage& msg) {
 
-    LOG(INFO) << "Processing sync from vehicle " << vehicle_id
-              << ": " << msg.jobs_size() << " jobs, "
-              << msg.executions_size() << " executions, "
-              << msg.deleted_job_ids_size() << " deletions";
+    // Count tombstones (jobs with deleted=true)
+    int tombstone_count = 0;
+    for (const auto& job : msg.jobs()) {
+        if (job.deleted()) tombstone_count++;
+    }
+
+    LOG(INFO) << "Processing V2C sync from vehicle " << vehicle_id
+              << ": " << msg.jobs_size() << " jobs (" << tombstone_count << " tombstones), "
+              << msg.executions_size() << " executions";
 
     // Ensure vehicle exists with enrichment
     upsert_vehicle(vehicle_id, fleet_id, region);
 
-    // Build set of job_ids from sync message
-    std::unordered_set<std::string> synced_job_ids;
-    for (const auto& job : msg.jobs()) {
-        if (!job.deleted()) {
-            synced_job_ids.insert(job.job_id());
-        }
-    }
-
     // Start transaction for atomic updates
     db_->begin_transaction();
 
-    // Delete jobs NOT in sync that are either:
-    // - status='deleting' (deletion confirmed by vehicle)
-    // - sync_state='synced' (vehicle deleted it - not a pending cloud job)
-    // Keep jobs with origin='cloud' AND sync_state='pending' (command not yet received)
-    if (!synced_job_ids.empty()) {
-        // Build comma-separated list of quoted job_ids for SQL IN clause
-        std::string job_ids_list;
-        for (const auto& jid : synced_job_ids) {
-            if (!job_ids_list.empty()) job_ids_list += ",";
-            job_ids_list += "'" + jid + "'";  // Simple quoting (job_ids are generated, safe)
-        }
+    // NOTE: We do NOT reset cloud jobs to pending based on V2C job count!
+    //
+    // The vehicle sync bridge is configured with "Terminal states only: yes",
+    // meaning it only sends jobs in terminal states (completed/failed/cancelled).
+    // A V2C message with 0 jobs means "no terminal jobs to report", NOT "vehicle has no jobs".
+    //
+    // The correct sync flow is:
+    // 1. Cloud creates job -> sync_state='pending'
+    // 2. Cloud sends C2V with pending jobs -> vehicle receives and stores
+    // 3. Vehicle echoes job back in V2C (immediate ack) -> cloud marks sync_state='synced'
+    // 4. Subsequent V2C messages only contain terminal jobs or changes
+    //
+    // DO NOT implement "drift detection" that resets jobs based on V2C content.
+    // This would cause an infinite sync loop since pending jobs are never in V2C.
 
-        db_->execute(
-            "DELETE FROM jobs WHERE vehicle_id = $1 "
-            "AND job_id NOT IN (" + job_ids_list + ") "
-            "AND (status = 'deleting' OR sync_state = 'synced')",
-            {vehicle_id});
-    } else {
-        // No jobs in sync - delete all synced/deleting jobs, keep pending cloud jobs
-        db_->execute(
-            "DELETE FROM jobs WHERE vehicle_id = $1 "
-            "AND (status = 'deleting' OR sync_state = 'synced')",
-            {vehicle_id});
-    }
-
-    // Upsert all jobs from the sync (sets sync_state='synced')
+    // Upsert all jobs from the sync
+    // When vehicle syncs a job that was pending from cloud, mark it synced
     for (const auto& job : msg.jobs()) {
-        if (!job.deleted()) {  // Skip tombstones
+        if (job.deleted()) {
+            // Handle tombstone - vehicle confirmed deletion
+            handle_v2_tombstone(vehicle_id, job);
+        } else {
             handle_v2_job_record(vehicle_id, job);
         }
     }
@@ -147,9 +165,143 @@ void SchedulerStore::handle_v2_job_record(
     const std::string& vehicle_id,
     const swdv::scheduler_sync_v2::JobRecord& job) {
 
+    // Per Scheduler Sync Protocol v2.4:
+    // 1. If incoming checksum matches stored checksum -> already applied, drop
+    // 2. Compare version vectors to determine if we should accept
+    // 3. Only accept if remote dominates or conflict is resolved in remote's favor
+
+    // First, query existing job to get version vector and compute checksum
+    auto existing = db_->execute(
+        R"(
+        SELECT cloud_seq, vehicle_seq, job_id, title, service_name, method_name,
+               COALESCE(parameters::text, '{}') as parameters,
+               scheduled_time, recurrence_rule, end_time,
+               wake_policy, sleep_policy, wake_lead_time_s, paused, origin, sync_state
+        FROM jobs
+        WHERE vehicle_id = $1 AND job_id = $2
+        )",
+        {vehicle_id, job.job_id()});
+
+    // Compute incoming job's checksum using library
+    uint64_t incoming_checksum = sched_lib::compute_job_content_hash(make_job_for_hash(
+        job.job_id(),
+        job.title(),
+        job.service(),
+        job.method(),
+        job.parameters_json().empty() ? "{}" : job.parameters_json(),
+        job.scheduled_time_ms(),
+        job.recurrence_rule(),
+        job.end_time_ms(),
+        job.paused(),
+        static_cast<int>(job.wake_policy()),
+        static_cast<int>(job.sleep_policy()),
+        job.wake_lead_time_s()));
+
+    if (existing.ok() && existing.num_rows() > 0) {
+        auto row = existing.row(0);
+
+        // Get existing version vector
+        uint64_t local_cloud_seq = row.is_null(0) ? 0 : static_cast<uint64_t>(row.get_int64(0));
+        uint64_t local_vehicle_seq = row.is_null(1) ? 0 : static_cast<uint64_t>(row.get_int64(1));
+
+        // Compute existing job's checksum
+        uint64_t scheduled_ms = 0;
+        if (!row.is_null(7)) {
+            scheduled_ms = parse_timestamp_to_ms(row.get_string(7));
+        }
+        uint64_t end_time_ms = 0;
+        if (!row.is_null(9)) {
+            end_time_ms = parse_timestamp_to_ms(row.get_string(9));
+        }
+        bool existing_paused = !row.is_null(13) && (row.get_string(13) == "t" || row.get_string(13) == "true");
+
+        uint64_t existing_checksum = sched_lib::compute_job_content_hash(make_job_for_hash(
+            row.get_string(2),   // job_id
+            row.get_string(3),   // title
+            row.get_string(4),   // service_name
+            row.get_string(5),   // method_name
+            row.get_string(6),   // parameters
+            scheduled_ms,
+            row.get_string(8),   // recurrence_rule
+            end_time_ms,
+            existing_paused,
+            row.is_null(10) ? 0 : row.get_int(10),   // wake_policy
+            row.is_null(11) ? 0 : row.get_int(11),   // sleep_policy
+            row.is_null(12) ? 0 : static_cast<uint32_t>(row.get_int(12))  // wake_lead_time_s
+        ));
+
+        // Check 1: If checksums match, this update is already applied - drop it
+        if (incoming_checksum == existing_checksum) {
+            VLOG(1) << "Job " << job.job_id() << ": checksum match, already applied - dropping";
+            return;  // Already have this exact content
+        }
+
+        // Check 2: If cloud has pending changes (sync_state='pending'), protect them
+        std::string existing_origin = row.get_string(14);
+        std::string existing_sync_state = row.get_string(15);
+
+        // Get incoming version vector
+        uint64_t remote_cloud_seq = job.version().cloud_seq();
+        uint64_t remote_vehicle_seq = job.version().vehicle_seq();
+
+        // Compare version vectors per Scheduler Sync Protocol v2.4:
+        // - If local dominates remote: reject (our pending changes are newer)
+        // - If remote dominates local: accept
+        // - If conflict: use authority (AUTHORITY_CLOUD wins on cloud side)
+
+        bool local_dominates = (local_cloud_seq >= remote_cloud_seq &&
+                               local_vehicle_seq >= remote_vehicle_seq &&
+                               (local_cloud_seq > remote_cloud_seq || local_vehicle_seq > remote_vehicle_seq));
+
+        bool remote_dominates = (remote_cloud_seq >= local_cloud_seq &&
+                                remote_vehicle_seq >= local_vehicle_seq &&
+                                (remote_cloud_seq > local_cloud_seq || remote_vehicle_seq > local_vehicle_seq));
+
+        // Check for version equality - vehicle is confirming receipt
+        bool versions_equal = (local_cloud_seq == remote_cloud_seq &&
+                              local_vehicle_seq == remote_vehicle_seq);
+
+        if (versions_equal) {
+            // Vehicle echoed back the same version - this is confirmation of receipt
+            if (existing_sync_state == "pending") {
+                LOG(INFO) << "Job " << job.job_id() << ": vehicle confirmed receipt (version {"
+                          << local_cloud_seq << "," << local_vehicle_seq << "}) - marking synced";
+                db_->execute(
+                    "UPDATE jobs SET sync_state = 'synced', updated_at_ms = $1 "
+                    "WHERE vehicle_id = $2 AND job_id = $3",
+                    {std::to_string(job.updated_at_ms()), vehicle_id, job.job_id()});
+            } else {
+                VLOG(1) << "Job " << job.job_id() << ": version match, already synced";
+            }
+            return;  // No content change needed
+        }
+
+        if (local_dominates) {
+            LOG(INFO) << "Job " << job.job_id() << ": local dominates (cloud_seq="
+                      << local_cloud_seq << "/" << remote_cloud_seq
+                      << ", vehicle_seq=" << local_vehicle_seq << "/" << remote_vehicle_seq
+                      << ") - rejecting stale V2C";
+            return;  // Our version is newer, don't overwrite
+        }
+
+        if (!remote_dominates) {
+            // Conflict: neither dominates. On cloud side, cloud authority wins.
+            // Since this job is being managed by cloud (origin='cloud' when sync_state='pending'),
+            // we reject the stale vehicle update
+            if (existing_origin == "cloud" && existing_sync_state == "pending") {
+                LOG(INFO) << "Job " << job.job_id() << ": conflict with pending cloud change - cloud wins";
+                return;  // Cloud authority wins the conflict
+            }
+            // Otherwise, accept vehicle's version (vehicle-created job or already synced)
+            LOG(INFO) << "Job " << job.job_id() << ": conflict resolved in favor of vehicle";
+        }
+    }
+
+    // Accept the update - either new job or remote dominates/wins conflict
     LOG(INFO) << "Job: " << job.job_id() << " (" << job.title() << ")"
               << " service=" << job.service() << "." << job.method()
-              << " status=" << job_status_to_string(job.status());
+              << " status=" << job_status_to_string(job.status())
+              << " checksum=" << incoming_checksum;
 
     // Convert scheduled_time_ms to ISO 8601 string for PostgreSQL
     std::string scheduled_time_str;
@@ -171,14 +323,16 @@ void SchedulerStore::handle_v2_job_record(
         next_run_time_str = buf;
     }
 
+    // Upsert job with version vector - vehicle is confirming it has this state
     db_->execute(
         R"(
         INSERT INTO jobs (
             vehicle_id, job_id, title, service_name, method_name,
             parameters, scheduled_time, recurrence_rule, next_run_time,
             status, wake_policy, sleep_policy, wake_lead_time_s,
-            created_at_ms, updated_at_ms, origin, sync_state
-        ) VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11, $12, $13, $14, $15, 'vehicle', 'synced')
+            created_at_ms, updated_at_ms, origin, sync_state, paused,
+            cloud_seq, vehicle_seq
+        ) VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11, $12, $13, $14, $15, 'vehicle', 'synced', $16, $17, $18)
         ON CONFLICT (vehicle_id, job_id)
         DO UPDATE SET
             title = EXCLUDED.title,
@@ -195,6 +349,9 @@ void SchedulerStore::handle_v2_job_record(
             created_at_ms = EXCLUDED.created_at_ms,
             updated_at_ms = EXCLUDED.updated_at_ms,
             sync_state = 'synced',
+            paused = EXCLUDED.paused,
+            cloud_seq = EXCLUDED.cloud_seq,
+            vehicle_seq = EXCLUDED.vehicle_seq,
             sync_updated_at = NOW()
         )",
         {
@@ -212,8 +369,32 @@ void SchedulerStore::handle_v2_job_record(
             std::to_string(static_cast<int>(job.sleep_policy())),
             std::to_string(job.wake_lead_time_s()),
             std::to_string(job.created_at_ms()),
-            std::to_string(job.updated_at_ms())
+            std::to_string(job.updated_at_ms()),
+            job.paused() ? "true" : "false",
+            std::to_string(job.version().cloud_seq()),
+            std::to_string(job.version().vehicle_seq())
         });
+}
+
+void SchedulerStore::handle_v2_tombstone(
+    const std::string& vehicle_id,
+    const swdv::scheduler_sync_v2::JobRecord& job) {
+
+    LOG(INFO) << "Tombstone received: job_id=" << job.job_id()
+              << " deleted_at_ms=" << job.deleted_at_ms();
+
+    // Delete the job from the database
+    // This handles both cloud-created and vehicle-created jobs
+    auto result = db_->execute(
+        "DELETE FROM jobs WHERE vehicle_id = $1 AND job_id = $2 RETURNING job_id",
+        {vehicle_id, job.job_id()});
+
+    if (result.ok() && result.num_rows() > 0) {
+        LOG(INFO) << "Deleted job " << job.job_id() << " for vehicle " << vehicle_id;
+    } else {
+        VLOG(1) << "Tombstone for unknown job " << job.job_id()
+                << " (already deleted or never existed)";
+    }
 }
 
 void SchedulerStore::handle_v2_execution_record(
@@ -243,6 +424,109 @@ void SchedulerStore::handle_v2_execution_record(
             exec.result_json(),
             exec.error_message()
         });
+}
+
+std::vector<swdv::scheduler_sync_v2::JobRecord> SchedulerStore::get_pending_cloud_jobs(
+    const std::string& vehicle_id) {
+
+    std::vector<swdv::scheduler_sync_v2::JobRecord> jobs;
+
+    // Get jobs with origin='cloud' and sync_state='pending'
+    // These are jobs created by cloud that vehicle hasn't confirmed yet
+    auto result = db_->execute(
+        R"(
+        SELECT job_id, title, service_name, method_name,
+               COALESCE(parameters::text, '{}') as parameters,
+               scheduled_time, recurrence_rule, next_run_time,
+               status, wake_policy, sleep_policy, wake_lead_time_s,
+               created_at_ms, updated_at_ms, end_time, paused
+        FROM jobs
+        WHERE vehicle_id = $1 AND origin = 'cloud' AND sync_state = 'pending'
+        )",
+        {vehicle_id});
+
+    if (!result.ok()) {
+        LOG(ERROR) << "Failed to query pending cloud jobs: " << result.error();
+        return jobs;
+    }
+
+    for (int i = 0; i < result.num_rows(); ++i) {
+        auto row = result.row(i);
+
+        swdv::scheduler_sync_v2::JobRecord job;
+        job.set_job_id(row.get_string(0));
+        job.set_title(row.get_string(1));
+        job.set_service(row.get_string(2));
+        job.set_method(row.get_string(3));
+        job.set_parameters_json(row.get_string(4));
+
+        // Parse scheduled_time string to epoch milliseconds (ISO 8601)
+        if (!row.is_null(5)) {
+            uint64_t scheduled_ms = parse_timestamp_to_ms(row.get_string(5));
+            if (scheduled_ms > 0) {
+                job.set_scheduled_time_ms(scheduled_ms);
+            }
+        }
+
+        job.set_recurrence_rule(row.get_string(6));
+
+        // Parse next_run_time (ISO 8601)
+        if (!row.is_null(7)) {
+            uint64_t next_run_ms = parse_timestamp_to_ms(row.get_string(7));
+            if (next_run_ms > 0) {
+                job.set_next_run_time_ms(next_run_ms);
+            }
+        }
+
+        job.set_status(string_to_job_status(row.get_string(8)));
+        job.set_wake_policy(static_cast<swdv::scheduler_sync_v2::WakePolicy>(
+            row.is_null(9) ? 0 : row.get_int(9)));
+        job.set_sleep_policy(static_cast<swdv::scheduler_sync_v2::SleepPolicy>(
+            row.is_null(10) ? 0 : row.get_int(10)));
+        job.set_wake_lead_time_s(row.is_null(11) ? 0 : static_cast<uint32_t>(row.get_int(11)));
+        job.set_created_at_ms(row.is_null(12) ? 0 : std::stoull(row.get_string(12)));
+        job.set_updated_at_ms(row.is_null(13) ? 0 : std::stoull(row.get_string(13)));
+
+        // Parse end_time (ISO 8601)
+        if (!row.is_null(14)) {
+            uint64_t end_time_ms = parse_timestamp_to_ms(row.get_string(14));
+            if (end_time_ms > 0) {
+                job.set_end_time_ms(end_time_ms);
+            }
+        }
+
+        // Set paused state
+        bool paused = !row.is_null(15) && (row.get_string(15) == "t" || row.get_string(15) == "true");
+        job.set_paused(paused);
+
+        // Set cloud authority for cloud-created jobs
+        job.set_authority(swdv::scheduler_sync_v2::AUTHORITY_CLOUD);
+
+        jobs.push_back(job);
+
+        LOG(INFO) << "Pending cloud job: " << job.job_id() << " (" << job.title() << ")";
+    }
+
+    return jobs;
+}
+
+void SchedulerStore::mark_jobs_synced(const std::string& vehicle_id,
+                                       const std::vector<std::string>& job_ids) {
+    if (job_ids.empty()) return;
+
+    // Build comma-separated list of quoted job_ids
+    std::string job_ids_list;
+    for (const auto& jid : job_ids) {
+        if (!job_ids_list.empty()) job_ids_list += ",";
+        job_ids_list += "'" + jid + "'";
+    }
+
+    db_->execute(
+        "UPDATE jobs SET sync_state = 'synced', sync_updated_at = NOW() "
+        "WHERE vehicle_id = $1 AND job_id IN (" + job_ids_list + ")",
+        {vehicle_id});
+
+    LOG(INFO) << "Marked " << job_ids.size() << " jobs as synced for " << vehicle_id;
 }
 
 void SchedulerStore::update_sync_state(
@@ -279,81 +563,142 @@ std::string SchedulerStore::job_status_to_string(
             return "failed";
         case swdv::scheduler_sync_v2::JOB_STATUS_CANCELLED:
             return "cancelled";
-        case swdv::scheduler_sync_v2::JOB_STATUS_PAUSED:
-            return "paused";
         default:
-            return "unknown";
+            return "pending";  // Fallback for future enum values
     }
 }
 
-void SchedulerStore::set_reconcile_callback(ReconcileCallback callback) {
-    reconcile_callback_ = std::move(callback);
+swdv::scheduler_sync_v2::JobStatus SchedulerStore::string_to_job_status(
+    const std::string& status) {
+    if (status == "pending") return swdv::scheduler_sync_v2::JOB_STATUS_PENDING;
+    if (status == "running") return swdv::scheduler_sync_v2::JOB_STATUS_RUNNING;
+    if (status == "completed") return swdv::scheduler_sync_v2::JOB_STATUS_COMPLETED;
+    if (status == "failed") return swdv::scheduler_sync_v2::JOB_STATUS_FAILED;
+    if (status == "cancelled") return swdv::scheduler_sync_v2::JOB_STATUS_CANCELLED;
+    return swdv::scheduler_sync_v2::JOB_STATUS_PENDING;  // Default
 }
 
-bool SchedulerStore::has_pending_offboard_items(const std::string& vehicle_id) {
-    // Check for jobs with sync_state='pending' (awaiting vehicle confirmation)
-    auto result = db_->execute_scalar(
-        "SELECT COUNT(*) FROM jobs WHERE vehicle_id = $1 AND sync_state = 'pending'",
-        {vehicle_id});
+// =============================================================================
+// Quiescence Detection (Scheduler Sync Protocol v2.4 Section 5.6)
+// =============================================================================
 
-    return result && std::stoi(*result) > 0;
-}
-
-std::vector<ReconcileCommand> SchedulerStore::reconcile_with_offboard(
-    const std::string& vehicle_id) {
-
-    std::vector<ReconcileCommand> commands;
-
-    LOG(INFO) << "Checking pending jobs for vehicle " << vehicle_id;
-
-    // Get jobs with sync_state='pending' (cloud-created jobs awaiting vehicle confirmation)
+uint64_t SchedulerStore::compute_cloud_state_checksum(const std::string& vehicle_id) {
+    // Query all jobs for this vehicle (both cloud and vehicle origin)
+    // Per spec: checksum covers ALL jobs, not just pending
     auto result = db_->execute(
         R"(
         SELECT job_id, title, service_name, method_name,
                COALESCE(parameters::text, '{}') as parameters,
                scheduled_time, recurrence_rule, end_time,
-               wake_policy, sleep_policy, wake_lead_time_s, status
+               wake_policy, sleep_policy, wake_lead_time_s, paused
         FROM jobs
-        WHERE vehicle_id = $1 AND sync_state = 'pending' AND status != 'deleting'
+        WHERE vehicle_id = $1
+        ORDER BY job_id  -- Deterministic ordering
         )",
         {vehicle_id});
 
     if (!result.ok()) {
-        LOG(ERROR) << "Failed to query pending jobs: " << result.error();
-        return commands;
+        LOG(ERROR) << "Failed to query jobs for checksum: " << result.error();
+        return 0;
     }
 
-    // Generate commands for pending jobs (retry/resend logic)
+    // Convert DB rows to library Job structs
+    std::vector<sched_lib::Job> jobs;
+    jobs.reserve(result.num_rows());
+
     for (int i = 0; i < result.num_rows(); ++i) {
         auto row = result.row(i);
-        std::string job_id = row.get_string(0);
 
-        ReconcileCommand cmd;
-        cmd.job_id = job_id;
-        cmd.title = row.get_string(1);
-        cmd.service = row.get_string(2);
-        cmd.method = row.get_string(3);
-        cmd.parameters_json = row.get_string(4);
+        uint64_t scheduled_ms = 0;
+        if (!row.is_null(5)) {
+            scheduled_ms = parse_timestamp_to_ms(row.get_string(5));
+        }
 
-        // Parse scheduled_time and end_time strings to epoch milliseconds
-        std::string scheduled_time_str = row.is_null(5) ? "" : row.get_string(5);
-        std::string end_time_str = row.is_null(7) ? "" : row.get_string(7);
-        cmd.scheduled_time_ms = Iso8601ToEpochMs(scheduled_time_str);
-        cmd.recurrence_rule = row.get_string(6);
-        cmd.end_time_ms = Iso8601ToEpochMs(end_time_str);
-        cmd.wake_policy = row.is_null(8) ? 0 : row.get_int(8);
-        cmd.sleep_policy = row.is_null(9) ? 0 : row.get_int(9);
-        cmd.wake_lead_time_s = row.is_null(10) ? 0 : static_cast<uint32_t>(row.get_int(10));
+        uint64_t end_time_ms = 0;
+        if (!row.is_null(7)) {
+            end_time_ms = parse_timestamp_to_ms(row.get_string(7));
+        }
 
-        // All pending jobs are CREATE (initial sync) or UPDATE (re-sync)
-        cmd.type = ReconcileCommand::CREATE;
-        commands.push_back(cmd);
-        LOG(INFO) << "Reconcile: resend job " << job_id << " to vehicle " << vehicle_id;
+        bool paused = !row.is_null(11) && (row.get_string(11) == "t" || row.get_string(11) == "true");
+
+        jobs.push_back(make_job_for_hash(
+            row.get_string(0),  // job_id
+            row.get_string(1),  // title
+            row.get_string(2),  // service_name
+            row.get_string(3),  // method_name
+            row.get_string(4),  // parameters
+            scheduled_ms,
+            row.get_string(6),  // recurrence_rule
+            end_time_ms,
+            paused,
+            row.is_null(8) ? 0 : row.get_int(8),   // wake_policy
+            row.is_null(9) ? 0 : row.get_int(9),   // sleep_policy
+            row.is_null(10) ? 0 : static_cast<uint32_t>(row.get_int(10))  // wake_lead_time_s
+        ));
     }
 
-    LOG(INFO) << "Reconciliation for " << vehicle_id << ": " << commands.size() << " pending jobs";
+    // Jobs already sorted by job_id from SQL ORDER BY
+    return sched_lib::compute_state_checksum(jobs);
+}
 
-    return commands;
+void SchedulerStore::store_v2c_checksum(const std::string& vehicle_id, uint64_t v2c_checksum) {
+    // Cast to signed int64_t for PostgreSQL BIGINT (preserves bit pattern)
+    // Checksums with high bit set will appear negative but comparison still works
+    int64_t signed_checksum = static_cast<int64_t>(v2c_checksum);
+
+    // Ensure sync_state row exists
+    db_->execute(
+        "INSERT INTO sync_state (vehicle_id, scheduler_v2c_checksum, updated_at) "
+        "VALUES ($1, $2, NOW()) "
+        "ON CONFLICT (vehicle_id) DO UPDATE SET "
+        "scheduler_v2c_checksum = $2, updated_at = NOW()",
+        {vehicle_id, std::to_string(signed_checksum)});
+
+    VLOG(1) << "Stored V2C checksum " << v2c_checksum << " (signed: " << signed_checksum << ") for " << vehicle_id;
+}
+
+uint64_t SchedulerStore::get_last_v2c_checksum(const std::string& vehicle_id) {
+    auto result = db_->execute_scalar(
+        "SELECT scheduler_v2c_checksum FROM sync_state WHERE vehicle_id = $1",
+        {vehicle_id});
+
+    if (result && !result->empty()) {
+        // Convert from signed (PostgreSQL BIGINT) back to unsigned
+        int64_t signed_val = std::stoll(*result);
+        return static_cast<uint64_t>(signed_val);
+    }
+    return 0;  // No checksum stored yet
+}
+
+bool SchedulerStore::is_quiescent(const std::string& vehicle_id) {
+    // Quiescent when no pending cloud jobs need to be synced to vehicle
+    // Note: We don't compare cloud vs vehicle checksums - they may differ due to
+    // different views (cloud has all jobs, vehicle may have terminal-only mode)
+    // The vehicle's reported checksum is stored for tracking state changes over time
+    auto result = db_->execute_scalar(
+        "SELECT COUNT(*) FROM jobs WHERE vehicle_id = $1 AND origin = 'cloud' AND sync_state = 'pending'",
+        {vehicle_id});
+
+    if (result && std::stoi(*result) > 0) {
+        return false;  // Have pending jobs to sync
+    }
+
+    return true;  // Quiescent - no pending cloud jobs
+}
+
+SchedulerStore::QuiescenceState SchedulerStore::get_quiescence_state(const std::string& vehicle_id) {
+    QuiescenceState state;
+    state.cloud_checksum = compute_cloud_state_checksum(vehicle_id);
+    state.last_v2c_checksum = get_last_v2c_checksum(vehicle_id);
+
+    // Quiescent when no pending cloud jobs to sync
+    // Note: checksums are for tracking, not for comparison between cloud and vehicle
+    auto result = db_->execute_scalar(
+        "SELECT COUNT(*) FROM jobs WHERE vehicle_id = $1 AND origin = 'cloud' AND sync_state = 'pending'",
+        {vehicle_id});
+    state.is_quiescent = !(result && std::stoi(*result) > 0);
+
+    return state;
 }
 
 }  // namespace ifex::offboard
