@@ -2483,6 +2483,16 @@ Status: ${syncInfo}</div>`;
             currentJob = job;
             showJsonView = false;
 
+            // Ensure schemas are loaded for parameter rendering
+            if (schemasData.length === 0) {
+                try {
+                    const data = await fetchJson('/api/schemas');
+                    schemasData = filterUserFacingServices(data.schemas || []);
+                } catch (e) {
+                    console.warn('Failed to load schemas for job details:', e);
+                }
+            }
+
             // Populate modal fields
             document.getElementById('job-detail-id').textContent = job.job_id;
             document.getElementById('job-detail-service').textContent = job.service_name;
@@ -2508,6 +2518,14 @@ Status: ${syncInfo}</div>`;
             // Look up schema for this service/method to get enum/struct definitions
             const jobSchema = schemasData.find(s => s.service_name === job.service_name);
             const jobMethod = jobSchema?.methods?.find(m => m.name === job.method_name);
+            console.log('Job details - service lookup:', {
+                jobServiceName: job.service_name,
+                jobMethodName: job.method_name,
+                schemasAvailable: schemasData.map(s => s.service_name),
+                foundSchema: jobSchema ? jobSchema.service_name : null,
+                foundMethod: jobMethod ? jobMethod.name : null,
+                enumDefs: jobSchema?.enum_definitions
+            });
             renderParamForm(job.parameters, jobSchema, jobMethod);
 
             // Scheduled time (convert to datetime-local format in LOCAL timezone)
