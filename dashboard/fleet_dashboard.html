@@ -2504,8 +2504,11 @@ Status: ${syncInfo}</div>`;
                 jobStatusEl.style.display = 'none';
             }
 
-            // Parameters - render as form
-            renderParamForm(job.parameters);
+            // Parameters - render as form with schema awareness
+            // Look up schema for this service/method to get enum/struct definitions
+            const jobSchema = schemasData.find(s => s.service_name === job.service_name);
+            const jobMethod = jobSchema?.methods?.find(m => m.name === job.method_name);
+            renderParamForm(job.parameters, jobSchema, jobMethod);
 
             // Scheduled time (convert to datetime-local format in LOCAL timezone)
             if (job.scheduled_time) {
@@ -2544,7 +2547,7 @@ Status: ${syncInfo}</div>`;
             loadJobExecutions(selectedCalendarVehicle, job.job_id);
         }
 
-        function renderParamForm(parameters) {
+        function renderParamForm(parameters, schema, method) {
             let params = {};
             if (parameters) {
                 try {
@@ -2567,18 +2570,47 @@ Status: ${syncInfo}</div>`;
                 return;
             }
 
+            // Get schema definitions for enum/struct rendering
+            const enumDefs = schema?.enum_definitions || schema?.enums || {};
+            const structDefs = schema?.struct_definitions || {};
+            const inputParams = method?.input || method?.input_parameters || [];
+
             let formHtml = '';
             for (const key of keys) {
                 const value = params[key];
-                const valueStr = typeof value === 'object' ? JSON.stringify(value) : String(value);
-                const inputType = typeof value === 'number' ? 'number' : 'text';
+                // Find parameter definition in schema
+                const paramDef = inputParams.find(p => p.name === key);
+                const paramType = paramDef?.datatype || paramDef?.type;
 
-                formHtml += `
-                    <div class="param-form-field">
-                        <label>${key}</label>
-                        <input type="${inputType}" name="param_${key}" value="${escapeHtml(valueStr)}" data-key="${key}">
-                    </div>
-                `;
+                // Check if it's an enum type
+                const enumValues = enumDefs[paramType];
+                if (enumValues && Array.isArray(enumValues)) {
+                    // Render as dropdown
+                    formHtml += `
+                        <div class="param-form-field">
+                            <label>${key}</label>
+                            <select name="param_${key}" data-key="${key}" data-type="enum">
+                                ${enumValues.map(v => {
+                                    // Extract value for comparison (handle "NAME (value)" format)
+                                    const match = v.match(/^(\w+)/);
+                                    const enumName = match ? match[1] : v;
+                                    const selected = (value === enumName || String(value) === enumName) ? 'selected' : '';
+                                    return `<option value="${enumName}" ${selected}>${v}</option>`;
+                                }).join('')}
+                            </select>
+                        </div>
+                    `;
+                } else {
+                    // Render as text/number input
+                    const valueStr = typeof value === 'object' ? JSON.stringify(value) : String(value);
+                    const inputType = typeof value === 'number' ? 'number' : 'text';
+                    formHtml += `
+                        <div class="param-form-field">
+                            <label>${key}</label>
+                            <input type="${inputType}" name="param_${key}" value="${escapeHtml(valueStr)}" data-key="${key}">
+                        </div>
+                    `;
+                }
             }
             formContainer.innerHTML = formHtml;
 
@@ -2608,7 +2640,10 @@ Status: ${syncInfo}</div>`;
                 // Sync JSON to form before switching
                 try {
                     const params = JSON.parse(jsonTextarea.value);
-                    renderParamForm(params);
+                    // Look up schema for current job
+                    const jobSchema = currentJob ? schemasData.find(s => s.service_name === currentJob.service_name) : null;
+                    const jobMethod = jobSchema?.methods?.find(m => m.name === currentJob.method_name);
+                    renderParamForm(params, jobSchema, jobMethod);
                 } catch (e) {
                     alert('Invalid JSON: ' + e.message);
                     showJsonView = true;
@@ -2620,13 +2655,14 @@ Status: ${syncInfo}</div>`;
         function syncFormToJson() {
             const formContainer = document.getElementById('job-detail-params-form');
             const jsonTextarea = document.getElementById('job-detail-params-json');
-            const inputs = formContainer.querySelectorAll('input[data-key]');
 
             let params = {};
             try {
                 params = JSON.parse(jsonTextarea.value);
             } catch {}
 
+            // Handle text/number inputs
+            const inputs = formContainer.querySelectorAll('input[data-key]');
             inputs.forEach(input => {
                 const key = input.dataset.key;
                 let value = input.value;
@@ -2641,6 +2677,13 @@ Status: ${syncInfo}</div>`;
                     }
                 }
                 params[key] = value;
+            });
+
+            // Handle select dropdowns (enums)
+            const selects = formContainer.querySelectorAll('select[data-key]');
+            selects.forEach(select => {
+                const key = select.dataset.key;
+                params[key] = select.value;
             });
 
             jsonTextarea.value = JSON.stringify(params, null, 2);
