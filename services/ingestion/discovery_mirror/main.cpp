@@ -49,7 +49,7 @@ std::string encode_schema_request(
     swdv::discovery_sync_envelope::discovery_envelope_t envelope;
     envelope.set_vehicle_id(vehicle_id);
 
-    auto* request = envelope.mutable_schema_request();
+    auto* request = envelope.mutable_request();
     for (const auto& hash : hashes) {
         request->add_hashes(hash);
     }

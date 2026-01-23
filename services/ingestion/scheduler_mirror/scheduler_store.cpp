@@ -230,19 +230,37 @@ void SchedulerStore::handle_v2_job_record(
             row.is_null(12) ? 0 : static_cast<uint32_t>(row.get_int(12))  // wake_lead_time_s
         ));
 
-        // Check 1: If checksums match, this update is already applied - drop it
-        if (incoming_checksum == existing_checksum) {
-            VLOG(1) << "Job " << job.job_id() << ": checksum match, already applied - dropping";
-            return;  // Already have this exact content
-        }
-
-        // Check 2: If cloud has pending changes (sync_state='pending'), protect them
+        // Get sync state first - needed for both checksum match and version comparison
         std::string existing_origin = row.get_string(14);
         std::string existing_sync_state = row.get_string(15);
 
         // Get incoming version vector
         uint64_t remote_cloud_seq = job.version().cloud_seq();
         uint64_t remote_vehicle_seq = job.version().vehicle_seq();
+
+        // Check 1: If checksums match, content is identical
+        // But still check if this is a sync confirmation (vehicle echoing back same version)
+        if (incoming_checksum == existing_checksum) {
+            // Even with matching checksum, check if this confirms a pending sync
+            bool versions_equal = (local_cloud_seq == remote_cloud_seq &&
+                                  local_vehicle_seq == remote_vehicle_seq);
+            if (versions_equal && existing_sync_state == "pending") {
+                LOG(INFO) << "Job " << job.job_id() << ": vehicle confirmed receipt (checksum match, version {"
+                          << local_cloud_seq << "," << local_vehicle_seq << "}) - marking synced";
+                db_->execute(
+                    "UPDATE jobs SET sync_state = 'synced', updated_at_ms = $1 "
+                    "WHERE vehicle_id = $2 AND job_id = $3",
+                    {std::to_string(job.updated_at_ms()), vehicle_id, job.job_id()});
+            } else {
+                VLOG(1) << "Job " << job.job_id() << ": checksum match, already applied - dropping";
+            }
+            return;  // No content change needed
+        }
+
+        // Check 2: Version-based conflict resolution for content changes
+        LOG(INFO) << "Job " << job.job_id() << ": comparing versions - "
+                  << "local={" << local_cloud_seq << "," << local_vehicle_seq << "} "
+                  << "remote={" << remote_cloud_seq << "," << remote_vehicle_seq << "}";
 
         // Compare version vectors per Scheduler Sync Protocol v2.4:
         // - If local dominates remote: reject (our pending changes are newer)
@@ -406,18 +424,20 @@ void SchedulerStore::handle_v2_execution_record(
               << " status=" << job_status_to_string(exec.status())
               << " duration=" << exec.duration_ms() << "ms";
 
-    // Use execution_id as primary key to avoid duplicates
+    // Use execution_id for deduplication via unique index
+    // ON CONFLICT on the partial unique index prevents duplicate execution records
     db_->execute(
         R"(
         INSERT INTO job_executions (
-            vehicle_id, job_id, status, executed_at_ms, duration_ms,
+            vehicle_id, job_id, execution_id, status, executed_at_ms, duration_ms,
             result, error_message
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7)
-        ON CONFLICT DO NOTHING
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        ON CONFLICT (execution_id) WHERE execution_id IS NOT NULL DO NOTHING
         )",
         {
             vehicle_id,
             exec.job_id(),
+            exec.execution_id(),
             job_status_to_string(exec.status()),
             std::to_string(exec.executed_at_ms()),
             std::to_string(exec.duration_ms()),
@@ -439,7 +459,8 @@ std::vector<swdv::scheduler_sync_v2::JobRecord> SchedulerStore::get_pending_clou
                COALESCE(parameters::text, '{}') as parameters,
                scheduled_time, recurrence_rule, next_run_time,
                status, wake_policy, sleep_policy, wake_lead_time_s,
-               created_at_ms, updated_at_ms, end_time, paused
+               created_at_ms, updated_at_ms, end_time, paused,
+               cloud_seq, vehicle_seq
         FROM jobs
         WHERE vehicle_id = $1 AND origin = 'cloud' AND sync_state = 'pending'
         )",
@@ -502,9 +523,15 @@ std::vector<swdv::scheduler_sync_v2::JobRecord> SchedulerStore::get_pending_clou
         // Set cloud authority for cloud-created jobs
         job.set_authority(swdv::scheduler_sync_v2::AUTHORITY_CLOUD);
 
+        // Set version vector from database
+        auto* version = job.mutable_version();
+        version->set_cloud_seq(row.is_null(16) ? 0 : static_cast<uint64_t>(row.get_int64(16)));
+        version->set_vehicle_seq(row.is_null(17) ? 0 : static_cast<uint64_t>(row.get_int64(17)));
+
         jobs.push_back(job);
 
-        LOG(INFO) << "Pending cloud job: " << job.job_id() << " (" << job.title() << ")";
+        LOG(INFO) << "Pending cloud job: " << job.job_id() << " (" << job.title() << ")"
+                  << " version={" << version->cloud_seq() << "," << version->vehicle_seq() << "}";
     }
 
     return jobs;

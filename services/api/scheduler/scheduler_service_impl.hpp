@@ -1,6 +1,5 @@
 #pragma once
 
-#include <atomic>
 #include <memory>
 
 #include "cloud-scheduler-service.grpc.pb.h"
@@ -130,9 +129,6 @@ private:
     std::shared_ptr<JobSyncProducer> producer_;
     SchedulerQuery query_;
     bool is_healthy_ = false;
-
-    // Cloud version counter for job versioning
-    std::atomic<uint64_t> cloud_seq_counter_{0};
 };
 
 }  // namespace ifex::cloud::scheduler

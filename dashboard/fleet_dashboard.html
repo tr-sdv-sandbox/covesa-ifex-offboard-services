@@ -622,6 +622,36 @@
             margin-bottom: 0.5rem;
         }
 
+        .field-group .default-hint {
+            font-size: 0.7rem;
+            color: #888;
+            font-weight: normal;
+        }
+
+        .field-group .constraint-hint {
+            font-size: 0.7rem;
+            color: #667eea;
+            font-weight: normal;
+            margin-left: 0.25rem;
+        }
+
+        .field-group input:invalid,
+        .field-group input.out-of-bounds {
+            border-color: #dc3545;
+            background-color: #fff5f5;
+        }
+
+        .field-group .validation-error {
+            font-size: 0.7rem;
+            color: #dc3545;
+            margin-top: 0.2rem;
+            display: none;
+        }
+
+        .field-group input.out-of-bounds + .validation-error {
+            display: block;
+        }
+
         .checkbox-group {
             display: flex;
             flex-wrap: wrap;
@@ -821,6 +851,53 @@
             border: 1px solid #ddd;
             border-radius: 4px;
             font-size: 0.85rem;
+        }
+
+        .param-form-field.struct {
+            flex-direction: column;
+            align-items: flex-start;
+        }
+
+        .param-form-field.struct > label {
+            font-weight: 500;
+            color: #333;
+            margin-bottom: 0.25rem;
+        }
+
+        .param-form-field .struct-fields {
+            width: 100%;
+            padding-left: 1rem;
+            border-left: 2px solid #e0e0e0;
+        }
+
+        .param-form-field .default-hint {
+            font-size: 0.7rem;
+            color: #888;
+            font-weight: normal;
+        }
+
+        .param-form-field .constraint-hint {
+            font-size: 0.7rem;
+            color: #667eea;
+            font-weight: normal;
+            margin-left: 0.25rem;
+        }
+
+        .param-form-field input:invalid,
+        .param-form-field input.out-of-bounds {
+            border-color: #dc3545;
+            background-color: #fff5f5;
+        }
+
+        .param-form-field .validation-error {
+            font-size: 0.7rem;
+            color: #dc3545;
+            margin-top: 0.2rem;
+            display: none;
+        }
+
+        .param-form-field input.out-of-bounds + .validation-error {
+            display: block;
         }
 
         .no-executions {
@@ -1350,7 +1427,7 @@
                             </button>
                         </div>
                         <div id="job-detail-params-form"></div>
-                        <textarea id="job-detail-params-json" rows="4" style="font-family: monospace; font-size: 0.8rem; display: none;"></textarea>
+                        <textarea id="job-detail-params-json" style="font-family: monospace; font-size: 0.8rem; display: none; width: 100%; min-height: 150px; resize: vertical;"></textarea>
                     </div>
                 </div>
 
@@ -1851,10 +1928,18 @@
 
             // Build attributes for input
             let attrs = `type="${inputType}" id="param-${fieldId}"`;
+            let constraintHint = '';
+            let validationMsg = '';
             if (inputType === 'number') {
                 attrs += ' step="any"';
-                if (constraints.min !== undefined) attrs += ` min="${constraints.min}"`;
-                if (constraints.max !== undefined) attrs += ` max="${constraints.max}"`;
+                if (constraints.min !== undefined) attrs += ` min="${constraints.min}" data-min="${constraints.min}"`;
+                if (constraints.max !== undefined) attrs += ` max="${constraints.max}" data-max="${constraints.max}"`;
+                if (constraints.min !== undefined || constraints.max !== undefined) {
+                    const minStr = constraints.min !== undefined ? constraints.min : '';
+                    const maxStr = constraints.max !== undefined ? constraints.max : '';
+                    constraintHint = ` <span class="constraint-hint">[${minStr}–${maxStr}]</span>`;
+                    validationMsg = `<span class="validation-error">Value must be between ${minStr} and ${maxStr}</span>`;
+                }
             }
             if (defaultValue !== undefined && inputType !== 'checkbox') {
                 attrs += ` value="${defaultValue}"`;
@@ -1862,11 +1947,13 @@
             if (inputType === 'checkbox' && defaultValue) {
                 attrs += ' checked';
             }
+            const defaultHint = defaultValue !== undefined ? ` <span class="default-hint">(default: ${defaultValue})</span>` : '';
 
             return `
                 <div class="field-group">
-                    <label>${name} (${type})${description ? ' - ' + description : ''}</label>
-                    <input ${attrs} placeholder="${placeholder}">
+                    <label>${name} (${type})${constraintHint}${defaultHint}${description ? ' - ' + description : ''}</label>
+                    <input ${attrs} placeholder="${placeholder}" oninput="validateBounds(this)" onchange="validateBounds(this)">
+                    ${validationMsg}
                 </div>
             `;
         }
@@ -2524,7 +2611,9 @@ Status: ${syncInfo}</div>`;
                 schemasAvailable: schemasData.map(s => s.service_name),
                 foundSchema: jobSchema ? jobSchema.service_name : null,
                 foundMethod: jobMethod ? jobMethod.name : null,
-                enumDefs: jobSchema?.enum_definitions
+                methodInputParams: jobMethod?.input || jobMethod?.input_parameters,
+                enumDefs: jobSchema?.enum_definitions,
+                jobParams: job.parameters
             });
             renderParamForm(job.parameters, jobSchema, jobMethod);
 
@@ -2600,42 +2689,131 @@ Status: ${syncInfo}</div>`;
                 const paramDef = inputParams.find(p => p.name === key);
                 const paramType = paramDef?.datatype || paramDef?.type;
 
-                // Check if it's an enum type
-                const enumValues = enumDefs[paramType];
-                if (enumValues && Array.isArray(enumValues)) {
-                    // Render as dropdown
-                    formHtml += `
-                        <div class="param-form-field">
-                            <label>${key}</label>
-                            <select name="param_${key}" data-key="${key}" data-type="enum">
-                                ${enumValues.map(v => {
-                                    // Extract value for comparison (handle "NAME (value)" format)
-                                    const match = v.match(/^(\w+)/);
-                                    const enumName = match ? match[1] : v;
-                                    const selected = (value === enumName || String(value) === enumName) ? 'selected' : '';
-                                    return `<option value="${enumName}" ${selected}>${v}</option>`;
-                                }).join('')}
-                            </select>
-                        </div>
-                    `;
-                } else {
-                    // Render as text/number input
-                    const valueStr = typeof value === 'object' ? JSON.stringify(value) : String(value);
-                    const inputType = typeof value === 'number' ? 'number' : 'text';
-                    formHtml += `
-                        <div class="param-form-field">
-                            <label>${key}</label>
-                            <input type="${inputType}" name="param_${key}" value="${escapeHtml(valueStr)}" data-key="${key}">
-                        </div>
-                    `;
-                }
+                formHtml += renderParamField(key, value, paramType, '', enumDefs, structDefs, paramDef);
             }
             formContainer.innerHTML = formHtml;
+
+            // Add change listeners to sync form → JSON and validate bounds
+            formContainer.querySelectorAll('input[data-key], select[data-key]').forEach(el => {
+                el.addEventListener('input', () => {
+                    validateBounds(el);
+                    syncFormToJson();
+                });
+                el.addEventListener('change', () => {
+                    validateBounds(el);
+                    syncFormToJson();
+                });
+                // Initial validation
+                validateBounds(el);
+            });
+
+            // Add listener to sync JSON → form (debounced to avoid sync loops)
+            jsonTextarea.removeEventListener('input', syncJsonToForm); // Remove old listener if any
+            jsonTextarea.addEventListener('input', syncJsonToForm);
 
             // Update toggle button text
             document.getElementById('param-view-toggle').textContent = 'Show JSON';
             formContainer.style.display = 'block';
             jsonTextarea.style.display = 'none';
+        }
+
+        // Validate number input against min/max bounds
+        function validateBounds(input) {
+            if (input.type !== 'number') return;
+
+            const min = input.dataset.min !== undefined ? parseFloat(input.dataset.min) : null;
+            const max = input.dataset.max !== undefined ? parseFloat(input.dataset.max) : null;
+            const value = parseFloat(input.value);
+
+            let outOfBounds = false;
+            if (!isNaN(value)) {
+                if (min !== null && value < min) outOfBounds = true;
+                if (max !== null && value > max) outOfBounds = true;
+            }
+
+            if (outOfBounds) {
+                input.classList.add('out-of-bounds');
+            } else {
+                input.classList.remove('out-of-bounds');
+            }
+        }
+
+        // Recursively render a parameter field with its value
+        // memberDef contains: { name, datatype, default, constraints: { min, max } }
+        function renderParamField(name, value, type, prefix, enumDefs, structDefs, memberDef) {
+            const fieldId = prefix ? `${prefix}.${name}` : name;
+            const constraints = memberDef?.constraints || {};
+            const defaultVal = memberDef?.default;
+
+            // Use default value if value is undefined
+            if (value === undefined && defaultVal !== undefined) {
+                value = defaultVal;
+            }
+
+            // Check if it's an enum type
+            const enumValues = enumDefs[type];
+            if (enumValues && Array.isArray(enumValues)) {
+                return `
+                    <div class="param-form-field">
+                        <label>${name}${defaultVal !== undefined ? ' <span class="default-hint">(default: ' + defaultVal + ')</span>' : ''}</label>
+                        <select name="param_${fieldId}" data-key="${fieldId}" data-type="enum">
+                            ${enumValues.map(v => {
+                                const match = v.match(/^(\w+)/);
+                                const enumName = match ? match[1] : v;
+                                const selected = (value === enumName || String(value) === enumName) ? 'selected' : '';
+                                return `<option value="${enumName}" ${selected}>${v}</option>`;
+                            }).join('')}
+                        </select>
+                    </div>
+                `;
+            }
+
+            // Check if it's a struct type
+            const structMembers = structDefs[type];
+            if (structMembers && Array.isArray(structMembers) && typeof value === 'object' && value !== null) {
+                let structHtml = `<div class="param-form-field struct"><label>${name} (${type})</label><div class="struct-fields">`;
+                for (const member of structMembers) {
+                    const memberValue = value[member.name];
+                    const memberType = member.datatype || member.type;
+                    // Pass full member definition for defaults/constraints
+                    structHtml += renderParamField(member.name, memberValue, memberType, fieldId, enumDefs, structDefs, member);
+                }
+                structHtml += '</div></div>';
+                return structHtml;
+            }
+
+            // Basic types - render as text/number input
+            const valueStr = typeof value === 'object' ? JSON.stringify(value) : String(value);
+            const inputType = typeof value === 'number' ? 'number' : 'text';
+
+            // Build min/max attributes for number inputs
+            let minMaxAttrs = '';
+            let constraintHint = '';
+            let validationMsg = '';
+            if (inputType === 'number') {
+                if (constraints.min !== undefined) {
+                    minMaxAttrs += ` min="${constraints.min}" data-min="${constraints.min}"`;
+                }
+                if (constraints.max !== undefined) {
+                    minMaxAttrs += ` max="${constraints.max}" data-max="${constraints.max}"`;
+                }
+                if (constraints.min !== undefined || constraints.max !== undefined) {
+                    const minStr = constraints.min !== undefined ? constraints.min : '';
+                    const maxStr = constraints.max !== undefined ? constraints.max : '';
+                    constraintHint = ` <span class="constraint-hint">[${minStr}–${maxStr}]</span>`;
+                    validationMsg = `<span class="validation-error">Value must be between ${minStr} and ${maxStr}</span>`;
+                }
+            }
+
+            const defaultHint = defaultVal !== undefined ? ` <span class="default-hint">(default: ${defaultVal})</span>` : '';
+
+            return `
+                <div class="param-form-field">
+                    <label>${name}${constraintHint}${defaultHint}</label>
+                    <input type="${inputType}" name="param_${fieldId}" value="${escapeHtml(valueStr)}" data-key="${fieldId}"${minMaxAttrs}>
+                    ${validationMsg}
+                </div>
+            `;
         }
 
         function escapeHtml(str) {
@@ -2679,6 +2857,19 @@ Status: ${syncInfo}</div>`;
                 params = JSON.parse(jsonTextarea.value);
             } catch {}
 
+            // Helper to set nested value using dot notation path
+            function setNestedVal(obj, path, value) {
+                const parts = path.split('.');
+                let current = obj;
+                for (let i = 0; i < parts.length - 1; i++) {
+                    if (!(parts[i] in current)) {
+                        current[parts[i]] = {};
+                    }
+                    current = current[parts[i]];
+                }
+                current[parts[parts.length - 1]] = value;
+            }
+
             // Handle text/number inputs
             const inputs = formContainer.querySelectorAll('input[data-key]');
             inputs.forEach(input => {
@@ -2694,17 +2885,66 @@ Status: ${syncInfo}</div>`;
                         // Keep as string
                     }
                 }
-                params[key] = value;
+                setNestedVal(params, key, value);
             });
 
             // Handle select dropdowns (enums)
             const selects = formContainer.querySelectorAll('select[data-key]');
             selects.forEach(select => {
                 const key = select.dataset.key;
-                params[key] = select.value;
+                setNestedVal(params, key, select.value);
             });
 
             jsonTextarea.value = JSON.stringify(params, null, 2);
+        }
+
+        function syncJsonToForm() {
+            const formContainer = document.getElementById('job-detail-params-form');
+            const jsonTextarea = document.getElementById('job-detail-params-json');
+
+            let params = {};
+            try {
+                params = JSON.parse(jsonTextarea.value);
+            } catch {
+                // Invalid JSON, don't update form
+                return;
+            }
+
+            // Helper to get nested value using dot notation path
+            function getNestedVal(obj, path) {
+                const parts = path.split('.');
+                let current = obj;
+                for (const part of parts) {
+                    if (current === null || current === undefined || !(part in current)) {
+                        return undefined;
+                    }
+                    current = current[part];
+                }
+                return current;
+            }
+
+            // Update text/number inputs
+            const inputs = formContainer.querySelectorAll('input[data-key]');
+            inputs.forEach(input => {
+                const key = input.dataset.key;
+                const value = getNestedVal(params, key);
+                if (value !== undefined) {
+                    const strVal = typeof value === 'object' ? JSON.stringify(value) : String(value);
+                    if (input.value !== strVal) {
+                        input.value = strVal;
+                    }
+                }
+            });
+
+            // Update select dropdowns (enums)
+            const selects = formContainer.querySelectorAll('select[data-key]');
+            selects.forEach(select => {
+                const key = select.dataset.key;
+                const value = getNestedVal(params, key);
+                if (value !== undefined && select.value !== String(value)) {
+                    select.value = String(value);
+                }
+            });
         }
 
         function getParamsFromModal() {

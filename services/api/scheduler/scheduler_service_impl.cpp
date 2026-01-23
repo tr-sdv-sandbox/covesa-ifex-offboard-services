@@ -6,6 +6,9 @@
 #include <sstream>
 #include <iomanip>
 
+// ifex-scheduler library for content hash comparison
+#include "job.hpp"
+
 namespace ifex::cloud::scheduler {
 
 CloudSchedulerServiceImpl::CloudSchedulerServiceImpl(
@@ -156,7 +159,8 @@ grpc::Status CloudSchedulerServiceImpl::create_job(
     }
 
     std::string job_id = generate_job_id();
-    uint64_t cloud_seq = ++cloud_seq_counter_;
+    // Per spec: new jobs start at {cloud_seq: 1, vehicle_seq: 0}
+    constexpr uint64_t cloud_seq = 1;
 
     LOG(INFO) << "create_job: vehicle=" << req.vehicle_id()
               << " job=" << job_id
@@ -283,6 +287,39 @@ grpc::Status CloudSchedulerServiceImpl::update_job(
             current_cloud_seq = row.is_null(0) ? 0 : static_cast<uint64_t>(row.get_int64(0));
             current_vehicle_seq = row.is_null(1) ? 0 : static_cast<uint64_t>(row.get_int64(1));
         }
+
+        // Build current job struct for hash comparison
+        ifex::scheduler::Job current_job;
+        current_job.job_id = job->job_id;
+        current_job.title = job->title;
+        current_job.service = job->service_name;
+        current_job.method = job->method_name;
+        current_job.parameters_json = job->parameters_json;
+        current_job.scheduled_time_ms = Iso8601ToEpochMs(job->scheduled_time);
+        current_job.recurrence_rule = job->recurrence_rule;
+        current_job.end_time_ms = Iso8601ToEpochMs(job->end_time);
+        current_job.paused = (job->status == 7);  // JOB_PAUSED
+
+        // Build new job struct with requested changes
+        ifex::scheduler::Job new_job = current_job;  // Start with current
+        if (!req.title().empty()) new_job.title = req.title();
+        if (!req.parameters_json().empty()) new_job.parameters_json = req.parameters_json();
+        if (req.scheduled_time_ms() != 0) new_job.scheduled_time_ms = req.scheduled_time_ms();
+        if (!req.recurrence_rule().empty()) new_job.recurrence_rule = req.recurrence_rule();
+        if (req.end_time_ms() != 0) new_job.end_time_ms = req.end_time_ms();
+
+        // Compare content hashes
+        uint64_t current_hash = current_job.content_hash();
+        uint64_t new_hash = new_job.content_hash();
+
+        if (current_hash == new_hash) {
+            LOG(INFO) << "update_job: job=" << req.job_id() << " - no content changes (hash=" << current_hash << "), skipping sync";
+            auto* res = response->mutable_result();
+            res->set_success(true);
+            return grpc::Status::OK;
+        }
+
+        LOG(INFO) << "update_job: job=" << req.job_id() << " - content changed (hash " << current_hash << " -> " << new_hash << ")";
 
         // Increment cloud_seq for this change
         uint64_t new_cloud_seq = current_cloud_seq + 1;
@@ -824,7 +861,8 @@ grpc::Status CloudSchedulerServiceImpl::create_fleet_job(
 
         for (const auto& vehicle_id : req.vehicle_ids()) {
             std::string job_id = generate_job_id();
-            uint64_t cloud_seq = ++cloud_seq_counter_;
+            // Per spec: new jobs start at {cloud_seq: 1, vehicle_seq: 0}
+            constexpr uint64_t cloud_seq = 1;
 
             // Build job data for sync message
             JobData job_data;
@@ -893,7 +931,20 @@ grpc::Status CloudSchedulerServiceImpl::delete_fleet_job(
                 continue;
             }
 
-            uint64_t cloud_seq = ++cloud_seq_counter_;
+            // Query current version vector from database
+            auto version_result = db_->execute(
+                "SELECT cloud_seq, vehicle_seq FROM jobs WHERE job_id = $1",
+                {job_id});
+            uint64_t current_cloud_seq = 0;
+            uint64_t current_vehicle_seq = 0;
+            if (version_result.ok() && version_result.num_rows() > 0) {
+                auto row = version_result.row(0);
+                current_cloud_seq = row.is_null(0) ? 0 : static_cast<uint64_t>(row.get_int64(0));
+                current_vehicle_seq = row.is_null(1) ? 0 : static_cast<uint64_t>(row.get_int64(1));
+            }
+
+            // Increment cloud_seq for this change
+            uint64_t new_cloud_seq = current_cloud_seq + 1;
 
             // Build job data with deleted=true
             JobData job_data;
@@ -907,8 +958,8 @@ grpc::Status CloudSchedulerServiceImpl::delete_fleet_job(
             job_data.end_time_ms = 0;
             job_data.paused = false;
             job_data.deleted = true;  // Mark as deleted
-            job_data.cloud_seq = cloud_seq;
-            job_data.vehicle_seq = 0;
+            job_data.cloud_seq = new_cloud_seq;
+            job_data.vehicle_seq = current_vehicle_seq;  // Preserve current vehicle_seq
 
             // Send C2V_SyncMessage with deleted flag
             bool sent = producer_->send_job_sync(job->vehicle_id, job_data);

@@ -84,6 +84,7 @@ CREATE TABLE job_executions (
     id SERIAL PRIMARY KEY,
     vehicle_id VARCHAR(64) NOT NULL REFERENCES vehicles(vehicle_id) ON DELETE CASCADE,
     job_id VARCHAR(64) NOT NULL,
+    execution_id VARCHAR(64),  -- Unique ID from vehicle, used for deduplication
     status VARCHAR(32),
     executed_at_ms BIGINT,
     duration_ms INTEGER,
@@ -98,6 +99,8 @@ COMMENT ON TABLE job_executions IS 'Job execution results synced from vehicles';
 CREATE INDEX idx_job_executions_vehicle ON job_executions(vehicle_id);
 CREATE INDEX idx_job_executions_job ON job_executions(job_id);
 CREATE INDEX idx_job_executions_time ON job_executions(executed_at_ms DESC);
+-- Unique constraint on execution_id for deduplication (partial index for non-null values)
+CREATE UNIQUE INDEX idx_job_executions_execution_id ON job_executions(execution_id) WHERE execution_id IS NOT NULL;
 
 -- =============================================================================
 -- RPC request tracking - REMOVED

@@ -33,15 +33,28 @@ else()
     find_program(GRPC_CPP_PLUGIN grpc_cpp_plugin REQUIRED)
 endif()
 
+# ==============================================================================
+# Proto Libraries
+# ==============================================================================
+# The shared sync protocols (scheduler-sync-v2, discovery-sync-envelope,
+# dispatcher-rpc-envelope) are provided by covesa-ifex-core's ifex-proto-generated.
+# We only generate offboard-specific protos here.
+
 # Proto generation output directory
 set(PROTO_GEN_DIR ${CMAKE_CURRENT_BINARY_DIR}/generated)
 file(MAKE_DIRECTORY ${PROTO_GEN_DIR})
 
-# Collect proto files
-file(GLOB PROTO_FILES ${CMAKE_CURRENT_SOURCE_DIR}/proto/*.proto)
+# Core proto directory (for imports)
+set(IFEX_CORE_PROTO_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../covesa-ifex-core/proto)
 
-# Generate protobuf and gRPC sources
-foreach(PROTO_FILE ${PROTO_FILES})
+# Offboard-specific proto files (these import from core's internal protos)
+set(OFFBOARD_PROTO_FILES
+    ${CMAKE_CURRENT_SOURCE_DIR}/proto/vehicle-enrichment.proto
+    ${CMAKE_CURRENT_SOURCE_DIR}/proto/rpc-offboard.proto
+)
+
+# Generate protobuf and gRPC sources for offboard-specific protos
+foreach(PROTO_FILE ${OFFBOARD_PROTO_FILES})
     get_filename_component(PROTO_NAME ${PROTO_FILE} NAME_WE)
 
     set(PROTO_SRC ${PROTO_GEN_DIR}/${PROTO_NAME}.pb.cc)
@@ -56,6 +69,7 @@ foreach(PROTO_FILE ${PROTO_FILES})
              --grpc_out=${PROTO_GEN_DIR}
              --plugin=protoc-gen-grpc=${GRPC_CPP_PLUGIN}
              -I${CMAKE_CURRENT_SOURCE_DIR}/proto
+             -I${IFEX_CORE_PROTO_DIR}/internal
              ${PROTO_FILE}
         DEPENDS ${PROTO_FILE}
         COMMENT "Generating protobuf/gRPC for ${PROTO_NAME}"
@@ -65,10 +79,12 @@ foreach(PROTO_FILE ${PROTO_FILES})
     list(APPEND PROTO_HDRS ${PROTO_HDR} ${GRPC_HDR})
 endforeach()
 
-# Generated proto library
+# Generated proto library (offboard-specific protos only)
 add_library(ifex_offboard_proto STATIC ${PROTO_SRCS})
 target_include_directories(ifex_offboard_proto PUBLIC ${PROTO_GEN_DIR})
+# Link against core's proto library for shared sync protocol types
 target_link_libraries(ifex_offboard_proto PUBLIC
+    ifex-proto-generated
     protobuf::libprotobuf
 )
 if(gRPC_FOUND)
@@ -298,6 +314,7 @@ target_link_libraries(scheduler_api PRIVATE
     offboard_platform
     ifex_offboard_proto
     postgres_client
+    ifex-scheduler
     ${RDKAFKA_LIBRARIES}
     glog::glog
     gflags
