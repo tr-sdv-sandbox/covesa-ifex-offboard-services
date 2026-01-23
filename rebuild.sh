@@ -3,11 +3,14 @@
 
 set -e
 
+mkdir -p build
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 echo "=== Rebuilding C++ binaries ==="
 cd build
+cmake ..
 make -j$(nproc)
 cd ..
 

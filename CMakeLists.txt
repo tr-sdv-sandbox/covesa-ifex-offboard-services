@@ -38,7 +38,7 @@ endif()
 # ==============================================================================
 # The shared sync protocols (scheduler-sync-v2, discovery-sync-envelope,
 # dispatcher-rpc-envelope) are provided by covesa-ifex-core's ifex-proto-generated.
-# We only generate offboard-specific protos here.
+# When building standalone, we generate them locally.
 
 # Proto generation output directory
 set(PROTO_GEN_DIR ${CMAKE_CURRENT_BINARY_DIR}/generated)
@@ -46,6 +46,46 @@ file(MAKE_DIRECTORY ${PROTO_GEN_DIR})
 
 # Core proto directory (for imports)
 set(IFEX_CORE_PROTO_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../covesa-ifex-core/proto)
+
+# Check if we're building standalone (ifex-proto-generated target not available)
+if(NOT TARGET ifex-proto-generated)
+    message(STATUS "Building standalone - generating core protos locally")
+    set(STANDALONE_BUILD ON)
+
+    # Core internal protos that we need (imported by our protos)
+    set(CORE_INTERNAL_PROTO_FILES
+        ${IFEX_CORE_PROTO_DIR}/internal/dispatcher-rpc-envelope.proto
+        ${IFEX_CORE_PROTO_DIR}/internal/scheduler-sync-v2.proto
+        ${IFEX_CORE_PROTO_DIR}/internal/discovery-sync-envelope.proto
+    )
+
+    # Generate core internal protos
+    foreach(PROTO_FILE ${CORE_INTERNAL_PROTO_FILES})
+        get_filename_component(PROTO_NAME ${PROTO_FILE} NAME_WE)
+
+        set(PROTO_SRC ${PROTO_GEN_DIR}/${PROTO_NAME}.pb.cc)
+        set(PROTO_HDR ${PROTO_GEN_DIR}/${PROTO_NAME}.pb.h)
+        set(GRPC_SRC ${PROTO_GEN_DIR}/${PROTO_NAME}.grpc.pb.cc)
+        set(GRPC_HDR ${PROTO_GEN_DIR}/${PROTO_NAME}.grpc.pb.h)
+
+        add_custom_command(
+            OUTPUT ${PROTO_SRC} ${PROTO_HDR} ${GRPC_SRC} ${GRPC_HDR}
+            COMMAND protobuf::protoc
+            ARGS --cpp_out=${PROTO_GEN_DIR}
+                 --grpc_out=${PROTO_GEN_DIR}
+                 --plugin=protoc-gen-grpc=${GRPC_CPP_PLUGIN}
+                 -I${IFEX_CORE_PROTO_DIR}/internal
+                 ${PROTO_FILE}
+            DEPENDS ${PROTO_FILE}
+            COMMENT "Generating core proto ${PROTO_NAME}"
+        )
+
+        list(APPEND CORE_PROTO_SRCS ${PROTO_SRC} ${GRPC_SRC})
+    endforeach()
+else()
+    message(STATUS "Building with workspace - using ifex-proto-generated")
+    set(STANDALONE_BUILD OFF)
+endif()
 
 # Offboard-specific proto files (these import from core's internal protos)
 set(OFFBOARD_PROTO_FILES
@@ -79,14 +119,19 @@ foreach(PROTO_FILE ${OFFBOARD_PROTO_FILES})
     list(APPEND PROTO_HDRS ${PROTO_HDR} ${GRPC_HDR})
 endforeach()
 
-# Generated proto library (offboard-specific protos only)
-add_library(ifex_offboard_proto STATIC ${PROTO_SRCS})
+# Generated proto library (offboard-specific protos + core protos if standalone)
+if(STANDALONE_BUILD)
+    add_library(ifex_offboard_proto STATIC ${PROTO_SRCS} ${CORE_PROTO_SRCS})
+else()
+    add_library(ifex_offboard_proto STATIC ${PROTO_SRCS})
+endif()
 target_include_directories(ifex_offboard_proto PUBLIC ${PROTO_GEN_DIR})
-# Link against core's proto library for shared sync protocol types
-target_link_libraries(ifex_offboard_proto PUBLIC
-    ifex-proto-generated
-    protobuf::libprotobuf
-)
+
+# Link against core's proto library when building with workspace
+if(NOT STANDALONE_BUILD)
+    target_link_libraries(ifex_offboard_proto PUBLIC ifex-proto-generated)
+endif()
+target_link_libraries(ifex_offboard_proto PUBLIC protobuf::libprotobuf)
 if(gRPC_FOUND)
     target_link_libraries(ifex_offboard_proto PUBLIC gRPC::grpc++)
 else()
