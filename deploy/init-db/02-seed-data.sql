@@ -57,44 +57,51 @@ SELECT
 FROM generate_series(1, 1000) as n;
 
 -- =============================================================================
--- Insert services for each vehicle (5 per vehicle = 5000 total)
+-- Insert service schemas (fleet-wide deduplication via hash)
+-- Note: Real services come from vehicle discovery sync, this is for test data
 -- =============================================================================
-INSERT INTO services (
-    vehicle_id, registration_id, service_name, version, description,
-    endpoint_address, transport_type, status, last_heartbeat_ms, namespaces
-)
+INSERT INTO schema_registry (schema_hash, ifex_schema, service_name, version, methods, first_vehicle_id)
+VALUES
+    ('a1b2c3d4e5f6789012345678901234567890123456789012345678901234abcd',
+     'name: climate.hvac\nversion: 1.0.0\nmethods:\n  - name: set_temperature\n  - name: get_status',
+     'climate.hvac', '1.0.0',
+     '[{"name": "set_temperature", "description": "Set cabin temperature"}, {"name": "get_status", "description": "Get HVAC status"}]'::jsonb,
+     (SELECT vehicle_id FROM vehicles LIMIT 1)),
+    ('b2c3d4e5f6789012345678901234567890123456789012345678901234abcde',
+     'name: diagnostics.obd\nversion: 1.0.0\nmethods:\n  - name: run_diagnostics\n  - name: get_dtcs',
+     'diagnostics.obd', '1.0.0',
+     '[{"name": "run_diagnostics", "description": "Run diagnostics"}, {"name": "get_dtcs", "description": "Get diagnostic trouble codes"}]'::jsonb,
+     (SELECT vehicle_id FROM vehicles LIMIT 1)),
+    ('c3d4e5f6789012345678901234567890123456789012345678901234abcdef',
+     'name: telematics.fleet\nversion: 1.0.0\nmethods:\n  - name: upload_telemetry\n  - name: get_location',
+     'telematics.fleet', '1.0.0',
+     '[{"name": "upload_telemetry", "description": "Upload telemetry data"}, {"name": "get_location", "description": "Get current location"}]'::jsonb,
+     (SELECT vehicle_id FROM vehicles LIMIT 1)),
+    ('d4e5f6789012345678901234567890123456789012345678901234abcdef01',
+     'name: powertrain.engine\nversion: 1.0.0\nmethods:\n  - name: get_engine_data\n  - name: generate_report',
+     'powertrain.engine', '1.0.0',
+     '[{"name": "get_engine_data", "description": "Get engine data"}, {"name": "generate_report", "description": "Generate engine report"}]'::jsonb,
+     (SELECT vehicle_id FROM vehicles LIMIT 1)),
+    ('e5f6789012345678901234567890123456789012345678901234abcdef0123',
+     'name: navigation.routing\nversion: 1.0.0\nmethods:\n  - name: calculate_route\n  - name: get_eta',
+     'navigation.routing', '1.0.0',
+     '[{"name": "calculate_route", "description": "Calculate route"}, {"name": "get_eta", "description": "Get estimated arrival time"}]'::jsonb,
+     (SELECT vehicle_id FROM vehicles LIMIT 1));
+
+-- =============================================================================
+-- Link vehicles to schemas (each vehicle has 3-5 random services)
+-- =============================================================================
+INSERT INTO vehicle_schemas (vehicle_id, schema_hash, last_seen_at)
 SELECT
     v.vehicle_id,
-    'svc-' || v.vehicle_id || '-' || s.idx as registration_id,
-    (ARRAY[
-        'climate.hvac',
-        'infotainment.media',
-        'navigation.routing',
-        'diagnostics.obd',
-        'telematics.fleet',
-        'adas.collision',
-        'powertrain.engine',
-        'body.doors',
-        'chassis.suspension',
-        'lighting.exterior'
-    ])[1 + ((row_number() OVER (PARTITION BY v.vehicle_id ORDER BY s.idx) - 1) % 10)] as service_name,
-    '1.' || (s.idx % 5) || '.0' as version,
-    'Auto-generated test service ' || s.idx as description,
-    'unix:///var/run/ifex/' || s.idx || '.sock' as endpoint_address,
-    (ARRAY['grpc', 'someip', 'dbus', 'http_rest'])[1 + (s.idx % 4)] as transport_type,
-    (ARRAY['available', 'available', 'available', 'unavailable', 'starting'])[1 + floor(random() * 5)::int] as status,
-    EXTRACT(EPOCH FROM NOW() - (random() * interval '1 hour'))::BIGINT * 1000 as last_heartbeat_ms,
-    jsonb_build_array(
-        jsonb_build_object(
-            'name', 'default',
-            'methods', jsonb_build_array(
-                jsonb_build_object('name', 'get_status', 'description', 'Get current status'),
-                jsonb_build_object('name', 'set_config', 'description', 'Set configuration')
-            )
-        )
-    ) as namespaces
+    s.schema_hash,
+    NOW() - (random() * interval '1 hour')
 FROM vehicles v
-CROSS JOIN generate_series(1, 5) as s(idx);
+CROSS JOIN (
+    SELECT schema_hash FROM schema_registry ORDER BY random()
+) s
+WHERE random() < 0.6  -- ~60% chance each vehicle has each service
+ON CONFLICT DO NOTHING;
 
 -- =============================================================================
 -- Insert jobs for each vehicle (3 per vehicle = 3000 total)
@@ -183,20 +190,23 @@ FROM vehicles;
 DO $$
 DECLARE
     v_count INTEGER;
-    s_count INTEGER;
+    schema_count INTEGER;
+    vs_count INTEGER;
     j_count INTEGER;
     e_count INTEGER;
 BEGIN
     SELECT COUNT(*) INTO v_count FROM vehicles;
-    SELECT COUNT(*) INTO s_count FROM services;
+    SELECT COUNT(*) INTO schema_count FROM schema_registry;
+    SELECT COUNT(*) INTO vs_count FROM vehicle_schemas;
     SELECT COUNT(*) INTO j_count FROM jobs;
     SELECT COUNT(*) INTO e_count FROM job_executions;
 
     RAISE NOTICE '=== Seed Data Summary ===';
-    RAISE NOTICE 'Vehicles:        %', v_count;
-    RAISE NOTICE 'Services:        %', s_count;
-    RAISE NOTICE 'Jobs:            %', j_count;
-    RAISE NOTICE 'Job Executions:  %', e_count;
+    RAISE NOTICE 'Vehicles:           %', v_count;
+    RAISE NOTICE 'Service Schemas:    %', schema_count;
+    RAISE NOTICE 'Vehicle-Schema Links: %', vs_count;
+    RAISE NOTICE 'Jobs:               %', j_count;
+    RAISE NOTICE 'Job Executions:     %', e_count;
     RAISE NOTICE '=========================';
 END $$;
 

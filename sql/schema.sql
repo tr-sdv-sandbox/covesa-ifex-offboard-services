@@ -59,6 +59,13 @@ CREATE TABLE jobs (
     wake_lead_time_s INTEGER DEFAULT 0,  -- seconds before scheduled_time to wake
     created_at_ms BIGINT,
     updated_at_ms BIGINT,
+    -- Version vector (Scheduler Sync Protocol v2)
+    cloud_seq BIGINT DEFAULT 0,          -- Cloud sequence number
+    vehicle_seq BIGINT DEFAULT 0,        -- Vehicle sequence number
+    authority VARCHAR(16) DEFAULT 'cloud', -- 'cloud' or 'vehicle' - who wins conflicts
+    deleted BOOLEAN DEFAULT false,       -- Soft delete tombstone
+    deleted_at_ms BIGINT,                -- When deleted (for GC)
+    paused BOOLEAN DEFAULT false,        -- Job is paused (won't be scheduled)
     -- Sync tracking
     origin VARCHAR(16) DEFAULT 'vehicle',     -- 'cloud' or 'vehicle'
     sync_state VARCHAR(16) DEFAULT 'synced',  -- 'pending', 'synced', 'rejected'
